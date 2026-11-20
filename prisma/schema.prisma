@@ -1,0 +1,134 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String           @id @default(cuid())
+  email          String           @unique
+  name           String
+  tiktokUsername String?
+  language       String           @default("ru")
+  role           String           @default("USER")
+  playToken      String           @unique
+  createdAt      DateTime         @default(now())
+  sessions       StreamSession[]
+  customContent  CustomContentItem[]
+  skinConfig     SkinConfig?
+  moderation     ModerationConfig?
+  playlist       PlaylistConfig?
+  giftPresets    GiftPreset[]
+}
+
+model StreamSession {
+  id           String        @id @default(cuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gameSlug     String
+  platform     String        @default("tiktok")
+  status       String        @default("ACTIVE")
+  peakViewers  Int           @default(0)
+  totalMsgs    Int           @default(0)
+  totalGifts   Int           @default(0)
+  startedAt    DateTime      @default(now())
+  endedAt      DateTime?
+  scores       PlayerScore[]
+}
+
+model GameSetting {
+  id        String   @id @default(cuid())
+  userId    String
+  gameSlug  String
+  config    Json
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, gameSlug])
+}
+
+model GiftPreset {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  isActive  Boolean  @default(false)
+  rules     Json
+  createdAt DateTime @default(now())
+}
+
+model CustomContentItem {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gameSlug  String
+  category  String
+  payload   Json
+  createdAt DateTime @default(now())
+}
+
+model PlaylistConfig {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  autopilot      Boolean  @default(false)
+  rotateBy       String   @default("rounds") // "rounds" | "minutes"
+  rotateInterval Int      @default(3)
+  queueSlugs     Json
+}
+
+model SkinConfig {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accentColor    String   @default("#6C2BD9")
+  backgroundMode String   @default("gradient")
+  ballShape      String   @default("circle")
+  fontFamily     String   @default("Manrope")
+  logoUrl        String?
+}
+
+model ModerationConfig {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profanityOn  Boolean  @default(true)
+  antiFloodSec Int      @default(2)
+  stopWords    Json
+  bannedUsers  Json
+  mutedUsers   Json
+}
+
+model PlayerScore {
+  id        String        @id @default(cuid())
+  sessionId String
+  session   StreamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  username  String
+  avatarUrl String?
+  points    Int           @default(0)
+  wins      Int           @default(0)
+  updatedAt DateTime      @updatedAt
+}
+
+model Article {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  lang        String   @default("ru")
+  title       String
+  excerpt     String
+  content     String
+  tags        Json
+  author      String
+  publishedAt DateTime @default(now())
+}
+
+model Complaint {
+  id        String   @id @default(cuid())
+  reporter  String
+  target    String
+  reason    String
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+}

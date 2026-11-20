@@ -1,0 +1,17 @@
+{
+  "name": "VibePlay LIVE — Интерактивные игры для TikTok LIVE",
+  "short_name": "VibePlay LIVE",
+  "description": "Интерактивные игры для эфиров TikTok LIVE: чат зрителей играет сообщениями и подарками прямо на экране телефона или в OBS.",
+  "start_url": "/ru/dashboard",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#080612",
+  "theme_color": "#7C3AED",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
