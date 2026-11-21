@@ -12,6 +12,7 @@ import {
   Bot,
   Gift,
   Send,
+  Heart,
 } from 'lucide-react';
 import { GAMES, getGameBySlug } from '@/lib/games-data';
 import { Lang } from '@/lib/i18n';
@@ -160,6 +161,16 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token, type: 'gift', username: 'fan_top', giftName, coins, giftEmoji }),
+    }).catch(() => {});
+  };
+
+  const triggerLike = async (likeCount = 50) => {
+    const ev = { id: `like-${Date.now()}`, type: 'like', timestamp: Date.now(), username: 'fan_top', likeCount };
+    postToChannel({ event: ev });
+    await fetch(apiUrl('/api/live/event'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, type: 'like', username: 'fan_top', likeCount }),
     }).catch(() => {});
   };
 
@@ -344,6 +355,13 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
                     <Gift className="h-3 w-3" /> {gf.emoji} {gf.giftName}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => triggerLike(50)}
+                  className="inline-flex items-center gap-1 rounded-xl border border-pink-500/30 bg-pink-500/15 px-3 py-1.5 text-xs font-bold text-pink-200 hover:bg-pink-500/25"
+                >
+                  <Heart className="h-3 w-3" /> +50 Лайков
+                </button>
               </div>
             </div>
           </div>

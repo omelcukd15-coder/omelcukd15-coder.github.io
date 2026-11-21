@@ -20,6 +20,8 @@ import {
   X,
   Trophy,
   MessageSquare,
+  Heart,
+  Crown,
 } from 'lucide-react';
 import {
   CONTEXTO_WORDS,
@@ -65,6 +67,83 @@ interface VoteBall {
   side: 1 | 2;
   size: number;
   color: string;
+}
+
+interface GiftLeaderEntry {
+  username: string;
+  avatar?: string;
+  coins: number;
+  giftsCount: number;
+  lastEmoji: string;
+}
+
+interface LikeLeaderEntry {
+  username: string;
+  avatar?: string;
+  likes: number;
+}
+
+interface GiftSpotlight {
+  id: string;
+  username: string;
+  avatar?: string;
+  giftName: string;
+  giftEmoji: string;
+  coins: number;
+  effectText: string;
+}
+
+interface FeedMessage {
+  id: string;
+  user: string;
+  avatar?: string;
+  text: string;
+  isGift?: boolean;
+  giftEmoji?: string;
+  coins?: number;
+}
+
+function PlayerAvatar({
+  avatar,
+  username,
+  size = 'sm',
+  accent = 'violet',
+}: {
+  avatar?: string;
+  username: string;
+  size?: 'xs' | 'sm' | 'md';
+  accent?: 'violet' | 'amber' | 'rose';
+}) {
+  const dim =
+    size === 'md'
+      ? 'h-10 w-10 text-sm'
+      : size === 'sm'
+      ? 'h-5 w-5 text-[10px]'
+      : 'h-4 w-4 text-[9px]';
+  if (avatar && avatar.startsWith('http')) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={avatar}
+        alt={username}
+        className={`${dim} shrink-0 rounded-full border border-white/25 object-cover shadow-sm`}
+      />
+    );
+  }
+  const grad =
+    accent === 'amber'
+      ? 'from-amber-400 to-rose-500'
+      : accent === 'rose'
+      ? 'from-pink-500 to-cyan-500'
+      : 'from-violet-500 to-fuchsia-500';
+  const label = avatar && avatar.length <= 4 ? avatar : username.slice(0, 1).toUpperCase() || '★';
+  return (
+    <span
+      className={`inline-flex ${dim} shrink-0 items-center justify-center rounded-full border border-white/20 bg-gradient-to-br ${grad} font-black text-white shadow-sm`}
+    >
+      {label}
+    </span>
+  );
 }
 
 function computeSemanticRank(guess: string, targetObj: (typeof CONTEXTO_WORDS)[number]): number {
@@ -159,14 +238,26 @@ export function GameScreen({
     { user: 'lera_fox', val: 86420 },
   ]);
   const [egeFilter, setEgeFilter] = useState<'ALL' | 'ЕГЭ' | 'ОГЭ'>('ALL');
-  const [chatFeed, setChatFeed] = useState<{ id: string; user: string; text: string; isGift?: boolean }[]>([
-    { id: 'c1', user: 'artem_gg', text: 'Всем привет! Го играть 🔥' },
-    { id: 'c2', user: 'lera_fox', text: 'Залетаем в топ!' },
+  const [giftLeaders, setGiftLeaders] = useState<Record<string, GiftLeaderEntry>>({
+    artem_gg: { username: 'artem_gg', avatar: '🧑‍💻', coins: 120, giftsCount: 2, lastEmoji: '🦁' },
+    lera_fox: { username: 'lera_fox', avatar: '🦊', coins: 45, giftsCount: 3, lastEmoji: '🍩' },
+    max_turbo: { username: 'max_turbo', avatar: '⚡', coins: 15, giftsCount: 3, lastEmoji: '🌹' },
+  });
+  const [likeLeaders, setLikeLeaders] = useState<Record<string, LikeLeaderEntry>>({
+    lera_fox: { username: 'lera_fox', avatar: '🦊', likes: 1420 },
+    artem_gg: { username: 'artem_gg', avatar: '🧑‍💻', likes: 980 },
+    nika_star: { username: 'nika_star', avatar: '🌟', likes: 640 },
+  });
+  const [giftSpotlight, setGiftSpotlight] = useState<GiftSpotlight | null>(null);
+  const [chatFeed, setChatFeed] = useState<FeedMessage[]>([
+    { id: 'c1', user: 'artem_gg', avatar: '🧑‍💻', text: 'Всем привет! Го играть 🔥' },
+    { id: 'c2', user: 'lera_fox', avatar: '🦊', text: 'Залетаем в топ!' },
   ]);
 
   const processedIdsRef = useRef<Set<string>>(new Set());
   const webcastCursorRef = useRef<string>('');
   const seenEventIdsRef = useRef<Set<string>>(new Set());
+  const giftSpotlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const triggerBanner = useCallback((text: string, tone: 'gift' | 'win' | 'info') => {
     setEventBanner({ text, tone });
@@ -248,6 +339,9 @@ export function GameScreen({
       }
       if (action === 'reset_scores') {
         setLocalScores({});
+        setGiftLeaders({});
+        setLikeLeaders({});
+        setGiftSpotlight(null);
         triggerBanner('Очки эфира сброшены', 'info');
         return;
       }
@@ -324,14 +418,78 @@ export function GameScreen({
         return;
       }
 
+      if (ev.type === 'like') {
+        const likes = Math.max(1, ev.likeCount || 1);
+        setLikeLeaders((prev) => {
+          const cur = prev[ev.username];
+          return {
+            ...prev,
+            [ev.username]: {
+              username: ev.username,
+              avatar: ev.avatar || cur?.avatar,
+              likes: (cur?.likes || 0) + likes,
+            },
+          };
+        });
+        return;
+      }
+
       if (ev.type === 'gift') {
         soundEngine.playGift();
         setShaking(true);
         setTimeout(() => setShaking(false), 420);
-        triggerBanner(`${ev.giftEmoji || '🎁'} ${ev.username} отправил(а) ${ev.giftName} (${ev.coins || 1} мон.)`, 'gift');
-        setChatFeed((prev) => [{ id: ev.id, user: ev.username, text: `подарил ${ev.giftName} ${ev.giftEmoji || '🎁'}`, isGift: true }, ...prev].slice(0, 8));
+        const coins = Math.max(1, ev.coins || 1);
+        const emoji = ev.giftEmoji || '🎁';
+        const giftName = ev.giftName || 'Подарок';
+        const effectText =
+          coins >= 25 ? '⚡ Новый раунд!' : coins >= 5 ? '✨ x2 Очки + Буква!' : '💡 Подсказка!';
 
-        const coins = ev.coins || 1;
+        setGiftLeaders((prev) => {
+          const cur = prev[ev.username];
+          return {
+            ...prev,
+            [ev.username]: {
+              username: ev.username,
+              avatar: ev.avatar || cur?.avatar,
+              coins: (cur?.coins || 0) + coins,
+              giftsCount: (cur?.giftsCount || 0) + 1,
+              lastEmoji: emoji,
+            },
+          };
+        });
+
+        setGiftSpotlight({
+          id: ev.id,
+          username: ev.username,
+          avatar: ev.avatar,
+          giftName,
+          giftEmoji: emoji,
+          coins,
+          effectText,
+        });
+        if (giftSpotlightTimerRef.current) {
+          clearTimeout(giftSpotlightTimerRef.current);
+        }
+        giftSpotlightTimerRef.current = setTimeout(() => {
+          setGiftSpotlight((cur) => (cur?.id === ev.id ? null : cur));
+        }, 4200);
+
+        triggerBanner(`${emoji} @${ev.username} подарил(а) ${giftName} (+${coins} мон.)`, 'gift');
+        setChatFeed((prev) =>
+          [
+            {
+              id: ev.id,
+              user: ev.username,
+              avatar: ev.avatar,
+              text: `подарил(а) ${giftName}`,
+              isGift: true,
+              giftEmoji: emoji,
+              coins,
+            },
+            ...prev,
+          ].slice(0, 8)
+        );
+
         if (coins >= 25) {
           startNewRound();
         } else if (coins >= 5) {
@@ -346,7 +504,9 @@ export function GameScreen({
       if (ev.type === 'chat' && ev.message) {
         const msg = ev.message.trim();
         const lower = msg.toLowerCase();
-        setChatFeed((prev) => [{ id: ev.id, user: ev.username, text: msg }, ...prev].slice(0, 8));
+        setChatFeed((prev) =>
+          [{ id: ev.id, user: ev.username, avatar: ev.avatar, text: msg }, ...prev].slice(0, 8)
+        );
         soundEngine.playGuess();
 
         if (paused || roundWinner) return;
@@ -635,7 +795,9 @@ export function GameScreen({
       'emoji-quiz': ['король лев', 'человек паук', 'титаник'],
       'ege-oge': ['1', '2', '3', '4'],
     };
+    let tick = 0;
     const timer = setInterval(() => {
+      tick += 1;
       const user = botUsers[Math.floor(Math.random() * botUsers.length)];
       const list = samples[activeSlug] || samples.contexto;
       const msg = list[Math.floor(Math.random() * list.length)];
@@ -646,6 +808,31 @@ export function GameScreen({
         username: user,
         message: msg,
       });
+
+      if (tick % 3 === 0) {
+        const likeUser = botUsers[Math.floor(Math.random() * botUsers.length)];
+        processEvent({
+          id: `lbot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          type: 'like',
+          timestamp: Date.now(),
+          username: likeUser,
+          likeCount: 15 + Math.floor(Math.random() * 40),
+        });
+      }
+
+      if (Math.random() < 0.12) {
+        const giftUser = botUsers[Math.floor(Math.random() * botUsers.length)];
+        const isHeart = Math.random() < 0.35;
+        processEvent({
+          id: `gbot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          type: 'gift',
+          timestamp: Date.now(),
+          username: giftUser,
+          giftName: isHeart ? 'Сердце' : 'Роза',
+          giftEmoji: isHeart ? '🫰' : '🌹',
+          coins: isHeart ? 5 : 1,
+        });
+      }
     }, 2200);
     return () => clearInterval(timer);
   }, [localBots, sessionState?.botsEnabled, paused, activeSlug, processEvent]);
@@ -753,6 +940,7 @@ export function GameScreen({
       type: 'gift',
       timestamp: Date.now(),
       username: simUser,
+      avatar: '💎',
       giftName,
       coins,
       giftEmoji,
@@ -762,6 +950,23 @@ export function GameScreen({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token, type: 'gift', username: simUser, giftName, coins, giftEmoji }),
+    }).catch(() => {});
+  };
+
+  const sendSimLike = async (likeCount = 50) => {
+    const ev: LiveEvent = {
+      id: `slike-${Date.now()}`,
+      type: 'like',
+      timestamp: Date.now(),
+      username: simUser,
+      avatar: '❤️',
+      likeCount,
+    };
+    processEvent(ev);
+    await fetch(apiUrl('/api/live/event'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, type: 'like', username: simUser, likeCount }),
     }).catch(() => {});
   };
 
@@ -791,6 +996,26 @@ export function GameScreen({
     }
     return Object.values(merged).sort((a, b) => b.points - a.points).slice(0, 3);
   }, [localScores, sessionState?.scores]);
+
+  const topGifters = useMemo(() => {
+    const sorted = Object.values(giftLeaders)
+      .sort((a, b) => b.coins - a.coins)
+      .slice(0, 3);
+    while (sorted.length < 3) {
+      sorted.push({ username: '—', coins: 0, giftsCount: 0, lastEmoji: '🎁' });
+    }
+    return sorted;
+  }, [giftLeaders]);
+
+  const topLikers = useMemo(() => {
+    const sorted = Object.values(likeLeaders)
+      .sort((a, b) => b.likes - a.likes)
+      .slice(0, 3);
+    while (sorted.length < 3) {
+      sorted.push({ username: '—', likes: 0 });
+    }
+    return sorted;
+  }, [likeLeaders]);
 
   // Skin background resolution (dark neon space by default)
   const skinBg = sessionState?.skin?.backgroundMode || 'neon';
@@ -857,25 +1082,25 @@ export function GameScreen({
     if (activeSlug === 'flag-quiz') {
       const f = FLAG_COUNTRIES[roundIdx % FLAG_COUNTRIES.length];
       return (
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-          <div className="relative flex h-40 w-64 flex-col overflow-hidden rounded-3xl border-4 border-white shadow-soft">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+          <div className="relative flex h-32 w-52 flex-col overflow-hidden rounded-3xl border-2 border-white/40 shadow-glow">
             <div className="flex h-full w-full">
               {f.colors.map((c, i) => (
                 <div key={i} className="flex-1" style={{ backgroundColor: c }} />
               ))}
             </div>
-            <div className="absolute inset-0 flex items-center justify-center bg-black/5 text-7xl drop-shadow">
+            <div className="absolute inset-0 flex items-center justify-center bg-black/10 text-6xl drop-shadow">
               {f.emoji}
             </div>
           </div>
-          <div className={`rounded-2xl px-4 py-2 font-display text-lg font-bold tracking-widest ${isDarkSurface ? 'bg-white/10' : 'bg-white shadow-sm'}`}>
+          <div className={`rounded-2xl border px-4 py-1.5 font-display text-base font-bold tracking-widest ${isDarkSurface ? 'border-white/15 bg-white/10' : 'border-slate-200 bg-white shadow-sm'}`}>
             {f.name
               .split('')
               .map((ch, idx) => (ch === ' ' ? ' ' : idx < revealedLetters ? ch.toUpperCase() : '_'))
               .join(' ')}
           </div>
-          {hintText && <div className="rounded-xl bg-amber-100 px-3 py-1.5 text-xs font-bold text-amber-900">{hintText}</div>}
-          <div className="text-xs font-semibold opacity-70">1-й +3 очка · 2-й +2 очка · 3-й +1 очко</div>
+          {hintText && <div className="rounded-xl bg-amber-400/20 px-3 py-1 text-[11px] font-bold text-amber-200">{hintText}</div>}
+          <div className="text-[11px] font-semibold opacity-70">1-й +3 очка · 2-й +2 очка · 3-й +1 очко</div>
         </div>
       );
     }
@@ -945,9 +1170,9 @@ export function GameScreen({
     if (activeSlug === 'logo-quiz') {
       const item = LOGO_BRANDS[roundIdx % LOGO_BRANDS.length];
       return (
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
           <div
-            className="flex h-44 w-44 items-center justify-center rounded-[2.5rem] text-7xl shadow-soft transition-all duration-700"
+            className="flex h-36 w-36 items-center justify-center rounded-[2rem] border border-white/25 text-6xl shadow-glow transition-all duration-700"
             style={{
               backgroundColor: item.bg,
               color: item.color,
@@ -956,7 +1181,7 @@ export function GameScreen({
           >
             {item.glyph}
           </div>
-          <div className={`rounded-xl px-4 py-1.5 text-xs font-bold ${isDarkSurface ? 'border border-white/15 bg-white/10 text-white' : 'bg-white/80 text-[#11101C]'}`}>
+          <div className={`rounded-xl px-3.5 py-1.5 text-[11px] font-bold ${isDarkSurface ? 'border border-white/15 bg-white/10 text-white' : 'bg-white/80 text-[#11101C]'}`}>
             Размытие: {Math.round(logoBlur)}px · Подарок 🌹 убирает блюр!
           </div>
         </div>
@@ -966,14 +1191,14 @@ export function GameScreen({
     if (activeSlug === 'spot-the-country') {
       const scene = COUNTRY_SCENES[roundIdx % COUNTRY_SCENES.length];
       return (
-        <div className="flex flex-1 flex-col justify-center gap-3">
-          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-800 p-6 text-center text-white shadow-soft">
-            <div className="text-xs font-bold uppercase tracking-widest opacity-80">Панорама улицы</div>
-            <div className="my-5 text-5xl tracking-widest">{scene.visual}</div>
-            <p className="rounded-2xl bg-black/25 p-3 text-sm font-medium">{scene.clues}</p>
+        <div className="flex flex-1 flex-col justify-center gap-2.5">
+          <div className="relative overflow-hidden rounded-2xl border border-white/15 bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-800 p-4 text-center text-white shadow-card">
+            <div className="text-[10px] font-bold uppercase tracking-widest opacity-80">Панорама улицы</div>
+            <div className="my-3 text-4xl tracking-widest">{scene.visual}</div>
+            <p className="rounded-xl bg-black/30 p-2.5 text-xs font-medium">{scene.clues}</p>
           </div>
-          {hintText && <div className="rounded-xl bg-amber-100 p-2 text-center text-xs font-bold text-amber-900">{hintText}</div>}
-          <div className="text-center font-display text-base font-bold tracking-widest">
+          {hintText && <div className="rounded-xl bg-amber-400/20 p-1.5 text-center text-[11px] font-bold text-amber-200">{hintText}</div>}
+          <div className="text-center font-display text-sm font-bold tracking-widest">
             {scene.country
               .split('')
               .map((c, idx) => (idx < revealedLetters ? c.toUpperCase() : '•'))
@@ -1244,28 +1469,42 @@ export function GameScreen({
       )}
 
       {/* Safe-zone padded inner container */}
-      <div className="flex h-full w-full flex-col pt-7 pb-10 pl-3.5 pr-7 sm:px-5">
-        {/* Top Game HUD */}
-        <div className="flex items-center justify-between gap-2 pb-2">
-          <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-lg shadow-sm backdrop-blur-md">
+      <div className="flex h-full w-full flex-col pt-5 pb-6 pl-3 pr-5 sm:px-4">
+        {/* Symmetrical Top Game HUD */}
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 pb-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-base shadow-sm backdrop-blur-md">
               {game.emoji}
             </span>
-            <div>
-              <div className="font-display text-xs font-extrabold leading-tight">{game.title}</div>
-              <div className="text-[10px] font-semibold opacity-70">
-                Раунд {roundNum} · {paused ? 'ПАУЗА' : `${roundTimer}с`}
+            <div className="min-w-0">
+              <div className="truncate font-display text-[11px] font-extrabold leading-tight">{game.title}</div>
+              <div className="truncate text-[9px] font-semibold text-violet-300">
+                🏆 @{topLeaderboard[0]?.username || 'чат'} · {topLeaderboard[0]?.points || 0}
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div
+            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-extrabold tracking-wide backdrop-blur-md ${
+              roundTimer <= 10 && !paused
+                ? 'border-rose-400/60 bg-rose-500/20 text-rose-200 animate-pulse'
+                : isDarkSurface
+                ? 'border-white/15 bg-white/10 text-white'
+                : 'border-violet-200 bg-white text-[#11101C]'
+            }`}
+          >
+            <span className="opacity-75">Р{roundNum}</span>
+            <span className="opacity-40">•</span>
+            <span className="font-mono">{paused ? 'ПАУЗА' : `${roundTimer}с`}</span>
+          </div>
+
+          <div className="flex items-center justify-end gap-1.5">
             {sessionState?.connectionStatus === 'connected' ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-500">
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
                 <Wifi className="h-3 w-3" /> LIVE
               </span>
             ) : localBots || sessionState?.botsEnabled ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-[#6C2BD9]">
+              <span className="inline-flex items-center gap-1 rounded-full border border-violet-400/30 bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-violet-200">
                 <Bot className="h-3 w-3" /> БОТЫ
               </span>
             ) : null}
@@ -1274,68 +1513,171 @@ export function GameScreen({
               type="button"
               onClick={toggleMute}
               title="Звук"
-              className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/10 backdrop-blur-sm transition hover:bg-black/20"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-white/10 backdrop-blur-sm transition hover:bg-white/20"
             >
               {muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
             </button>
           </div>
         </div>
 
-        {/* Floating Event / Gift / Win Banner */}
-        {eventBanner && (
-          <div
-            className={`animate-spring-pop mb-2 rounded-xl px-3 py-1.5 text-center text-xs font-extrabold text-white shadow-card ${
-              eventBanner.tone === 'win'
-                ? 'bg-gradient-to-r from-emerald-500 to-teal-500'
-                : eventBanner.tone === 'gift'
-                ? 'bg-gradient-to-r from-pink-500 to-rose-500'
-                : 'bg-[#6C2BD9]'
-            }`}
-          >
-            {eventBanner.text}
+        {/* Dedicated Donor Gift Spotlight Card */}
+        {giftSpotlight ? (
+          <div className="animate-spring-pop mb-2 flex items-center justify-between gap-2 rounded-2xl border border-amber-300/60 bg-gradient-to-r from-rose-600/90 via-fuchsia-600/90 to-amber-500/90 p-2 text-white shadow-glow backdrop-blur-md">
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="relative shrink-0">
+                <PlayerAvatar avatar={giftSpotlight.avatar} username={giftSpotlight.username} size="md" accent="amber" />
+                <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-400 text-[9px] text-black shadow">
+                  <Crown className="h-2.5 w-2.5" />
+                </span>
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-xs font-black leading-tight">@{giftSpotlight.username}</div>
+                <div className="truncate text-[10px] font-semibold text-amber-100">
+                  подарил(а) {giftSpotlight.giftName}
+                </div>
+                <span className="mt-0.5 inline-block rounded-full bg-black/25 px-1.5 py-0.5 text-[9px] font-bold text-amber-200">
+                  {giftSpotlight.effectText}
+                </span>
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-col items-center rounded-xl bg-black/25 px-2.5 py-1 text-center">
+              <span className="text-xl leading-none">{giftSpotlight.giftEmoji}</span>
+              <span className="mt-0.5 font-mono text-[10px] font-black text-amber-300">💎 +{giftSpotlight.coins}</span>
+            </div>
           </div>
+        ) : (
+          eventBanner && (
+            <div
+              className={`animate-spring-pop mb-2 rounded-xl px-3 py-1.5 text-center text-xs font-extrabold text-white shadow-card ${
+                eventBanner.tone === 'win'
+                  ? 'bg-gradient-to-r from-emerald-500 to-teal-500'
+                  : eventBanner.tone === 'gift'
+                  ? 'bg-gradient-to-r from-pink-500 to-rose-500'
+                  : 'bg-[#6C2BD9]'
+              }`}
+            >
+              {eventBanner.text}
+            </div>
+          )
         )}
 
         {/* Round Winner Card */}
         {roundWinner && (
-          <div className="animate-spring-pop mb-2 rounded-2xl border-2 border-emerald-400 bg-emerald-500 p-3 text-center text-white shadow-soft">
-            <div className="text-xs font-bold uppercase tracking-wider">Раунд завершён!</div>
-            <div className="font-display text-base font-extrabold">
+          <div className="animate-spring-pop mb-2 rounded-2xl border-2 border-emerald-400 bg-gradient-to-r from-emerald-600 to-teal-600 p-2.5 text-center text-white shadow-soft">
+            <div className="text-[10px] font-bold uppercase tracking-wider opacity-90">Раунд завершён!</div>
+            <div className="font-display text-sm font-extrabold">
               🎉 @{roundWinner.user} — {roundWinner.answer}
             </div>
             {nextRoundCountdown !== null && (
-              <div className="mt-1 text-[11px] font-semibold opacity-90">
+              <div className="mt-0.5 text-[10px] font-semibold opacity-90">
                 Следующий раунд через {nextRoundCountdown} сек...
               </div>
             )}
           </div>
         )}
 
-        {/* Main Game Canvas / UI */}
-        {renderGameBody()}
+        {/* Symmetrical Framed Game Stage */}
+        <div
+          className={`relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border p-2.5 backdrop-blur-md ${
+            isDarkSurface
+              ? 'border-white/15 bg-gradient-to-b from-white/[0.08] via-white/[0.03] to-transparent shadow-card'
+              : 'border-violet-200/80 bg-white/80 shadow-sm'
+          }`}
+        >
+          {renderGameBody()}
+        </div>
 
-        {/* Bottom Leaderboard & Live Chat Ticker */}
-        <div className="mt-2.5 space-y-1.5">
-          <div className={`flex items-center justify-between rounded-xl border px-2.5 py-1.5 text-[11px] font-bold backdrop-blur-md ${isDarkSurface ? 'border-white/10 bg-white/[0.08] text-white' : 'border-slate-200 bg-white/90 shadow-sm'}`}>
-            <span className="flex items-center gap-1 text-violet-400">
-              <Trophy className="h-3.5 w-3.5" /> Топ:
-            </span>
-            <div className="flex gap-2 overflow-hidden">
-              {topLeaderboard.map((p, idx) => (
-                <span key={p.username} className="truncate">
-                  {idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉'} {p.username.slice(0, 8)} ({p.points})
-                </span>
-              ))}
+        {/* Bottom Symmetrical Dual Leaderboards: Gifts Left / Likes Right */}
+        <div className="mt-2 space-y-1.5">
+          <div className="grid grid-cols-2 gap-2">
+            {/* LEFT: Top Gifters */}
+            <div
+              className={`flex flex-col rounded-2xl border p-2 backdrop-blur-md ${
+                isDarkSurface
+                  ? 'border-amber-400/25 bg-gradient-to-b from-amber-500/15 to-rose-500/5 text-white'
+                  : 'border-amber-200 bg-white/95 text-[#11101C] shadow-sm'
+              }`}
+            >
+              <div className="mb-1 flex items-center justify-between border-b border-white/10 pb-1">
+                <span className="text-[9px] font-black uppercase tracking-wider text-amber-300">🎁 ТОП ПОДАРКОВ</span>
+                <Trophy className="h-3 w-3 text-amber-300" />
+              </div>
+              <div className="space-y-1">
+                {topGifters.map((g, idx) => (
+                  <div key={`${g.username}-${idx}`} className="flex items-center justify-between gap-1 text-[10px] leading-tight">
+                    <div className="flex min-w-0 items-center gap-1">
+                      <span className="shrink-0 text-[10px]">{idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉'}</span>
+                      <PlayerAvatar avatar={g.avatar} username={g.username} size="xs" accent="amber" />
+                      <span className="truncate font-bold">{g.username === '—' ? '—' : `@${g.username}`}</span>
+                    </div>
+                    <span className="shrink-0 font-mono text-[10px] font-extrabold text-amber-300">
+                      {g.coins > 0 ? `${g.lastEmoji}${g.coins}` : '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* RIGHT: Top Likers */}
+            <div
+              className={`flex flex-col rounded-2xl border p-2 backdrop-blur-md ${
+                isDarkSurface
+                  ? 'border-pink-400/25 bg-gradient-to-b from-pink-500/15 to-cyan-500/5 text-white'
+                  : 'border-pink-200 bg-white/95 text-[#11101C] shadow-sm'
+              }`}
+            >
+              <div className="mb-1 flex items-center justify-between border-b border-white/10 pb-1">
+                <span className="text-[9px] font-black uppercase tracking-wider text-pink-300">❤️ ТОП ЛАЙКОВ</span>
+                <Heart className="h-3 w-3 text-pink-400" />
+              </div>
+              <div className="space-y-1">
+                {topLikers.map((l, idx) => (
+                  <div key={`${l.username}-${idx}`} className="flex items-center justify-between gap-1 text-[10px] leading-tight">
+                    <div className="flex min-w-0 items-center gap-1">
+                      <span className="shrink-0 text-[10px]">{idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉'}</span>
+                      <PlayerAvatar avatar={l.avatar} username={l.username} size="xs" accent="rose" />
+                      <span className="truncate font-bold">{l.username === '—' ? '—' : `@${l.username}`}</span>
+                    </div>
+                    <span className="shrink-0 font-mono text-[10px] font-extrabold text-pink-300">
+                      {l.likes > 0 ? `❤️${l.likes}` : '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
-          <div className={`space-y-1 rounded-xl border px-2.5 py-1.5 text-[11px] backdrop-blur-md ${isDarkSurface ? 'border-white/10 bg-black/40 text-slate-200' : 'border-slate-200 bg-black/5'}`}>
+          {/* Compact Live Chat & Gift Feed */}
+          <div
+            className={`space-y-1 rounded-2xl border px-2.5 py-1.5 text-[10px] backdrop-blur-md ${
+              isDarkSurface ? 'border-white/10 bg-black/45 text-slate-200' : 'border-slate-200 bg-black/5'
+            }`}
+          >
             {chatFeed.length > 0 ? (
-              chatFeed.slice(0, 3).map((c) => (
-                <div key={c.id} className="animate-spring-pop flex items-center gap-1.5 truncate">
-                  <MessageSquare className="h-3 w-3 shrink-0 text-cyan-400" />
-                  <span className="font-bold text-violet-300">@{c.user}:</span>
-                  <span className="truncate font-medium">{c.text}</span>
+              chatFeed.slice(0, 2).map((c) => (
+                <div
+                  key={c.id}
+                  className={`animate-spring-pop flex items-center justify-between gap-1.5 rounded-lg px-1.5 py-0.5 ${
+                    c.isGift ? 'bg-gradient-to-r from-pink-500/20 to-amber-500/15 text-amber-100' : ''
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <PlayerAvatar
+                      avatar={c.avatar}
+                      username={c.user}
+                      size="xs"
+                      accent={c.isGift ? 'amber' : 'violet'}
+                    />
+                    <span className={`shrink-0 font-extrabold ${c.isGift ? 'text-amber-300' : 'text-violet-300'}`}>
+                      @{c.user}:
+                    </span>
+                    <span className="truncate font-medium">{c.text}</span>
+                  </div>
+                  {c.isGift && c.coins ? (
+                    <span className="shrink-0 font-mono text-[9px] font-black text-amber-300">
+                      {c.giftEmoji || '🎁'} +{c.coins}
+                    </span>
+                  ) : null}
                 </div>
               ))
             ) : (
@@ -1499,6 +1841,13 @@ export function GameScreen({
                 className="inline-flex items-center gap-1 rounded-xl border border-violet-500/30 bg-violet-500/15 px-2.5 py-1.5 text-[11px] font-bold text-violet-300"
               >
                 🍩 Пончик (30)
+              </button>
+              <button
+                type="button"
+                onClick={() => sendSimLike(50)}
+                className="inline-flex items-center gap-1 rounded-xl border border-pink-500/30 bg-pink-500/15 px-2.5 py-1.5 text-[11px] font-bold text-pink-300"
+              >
+                <Heart className="h-3 w-3" /> Лайк (+50)
               </button>
             </div>
 
