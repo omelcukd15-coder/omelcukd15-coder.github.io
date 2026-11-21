@@ -15,14 +15,21 @@ import {
   Lightbulb,
   SkipForward,
   Send,
-  Gift,
   Eye,
   X,
-  Trophy,
   MessageSquare,
-  Heart,
-  Crown,
 } from 'lucide-react';
+import {
+  CustomAvatarCrest,
+  CustomBoltIcon,
+  CustomCoinIcon,
+  CustomGameEmblem,
+  CustomGiftIcon,
+  CustomHeartIcon,
+  CustomRankBadge,
+  CustomSparkIcon,
+  CustomTrophyIcon,
+} from './CustomGameIcons';
 import {
   CONTEXTO_WORDS,
   COUNTRY_SCENES,
@@ -99,6 +106,7 @@ interface FeedMessage {
   avatar?: string;
   text: string;
   isGift?: boolean;
+  giftName?: string;
   giftEmoji?: string;
   coins?: number;
 }
@@ -114,34 +122,30 @@ function PlayerAvatar({
   size?: 'xs' | 'sm' | 'md';
   accent?: 'violet' | 'amber' | 'rose';
 }) {
-  const dim =
-    size === 'md'
-      ? 'h-10 w-10 text-sm'
-      : size === 'sm'
-      ? 'h-5 w-5 text-[10px]'
-      : 'h-4 w-4 text-[9px]';
+  const px = size === 'md' ? 36 : size === 'sm' ? 20 : 16;
+  const ringGrad =
+    accent === 'amber'
+      ? 'from-amber-300 via-yellow-400 to-rose-500'
+      : accent === 'rose'
+      ? 'from-pink-400 via-rose-500 to-cyan-400'
+      : 'from-violet-400 to-fuchsia-500';
+
   if (avatar && avatar.startsWith('http')) {
     return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={avatar}
-        alt={username}
-        className={`${dim} shrink-0 rounded-full border border-white/25 object-cover shadow-sm`}
-      />
+      <span className={`inline-flex shrink-0 rounded-full bg-gradient-to-br ${ringGrad} p-[1.5px] shadow-sm`}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={avatar}
+          alt={username}
+          style={{ width: px, height: px }}
+          className="rounded-full object-cover"
+        />
+      </span>
     );
   }
-  const grad =
-    accent === 'amber'
-      ? 'from-amber-400 to-rose-500'
-      : accent === 'rose'
-      ? 'from-pink-500 to-cyan-500'
-      : 'from-violet-500 to-fuchsia-500';
-  const label = avatar && avatar.length <= 4 ? avatar : username.slice(0, 1).toUpperCase() || '★';
   return (
-    <span
-      className={`inline-flex ${dim} shrink-0 items-center justify-center rounded-full border border-white/20 bg-gradient-to-br ${grad} font-black text-white shadow-sm`}
-    >
-      {label}
+    <span className={`inline-flex shrink-0 rounded-full bg-gradient-to-br ${ringGrad} p-[1.5px] shadow-sm`}>
+      <CustomAvatarCrest seed={username} size={px} />
     </span>
   );
 }
@@ -442,7 +446,7 @@ export function GameScreen({
         const emoji = ev.giftEmoji || '🎁';
         const giftName = ev.giftName || 'Подарок';
         const effectText =
-          coins >= 25 ? '⚡ Новый раунд!' : coins >= 5 ? '✨ x2 Очки + Буква!' : '💡 Подсказка!';
+          coins >= 25 ? 'Новый раунд' : coins >= 5 ? 'x2 Очки + Буква' : 'Подсказка';
 
         setGiftLeaders((prev) => {
           const cur = prev[ev.username];
@@ -474,7 +478,7 @@ export function GameScreen({
           setGiftSpotlight((cur) => (cur?.id === ev.id ? null : cur));
         }, 4200);
 
-        triggerBanner(`${emoji} @${ev.username} подарил(а) ${giftName} (+${coins} мон.)`, 'gift');
+        triggerBanner(`@${ev.username}: ${giftName} (+${coins} монет)`, 'gift');
         setChatFeed((prev) =>
           [
             {
@@ -483,6 +487,7 @@ export function GameScreen({
               avatar: ev.avatar,
               text: `подарил(а) ${giftName}`,
               isGift: true,
+              giftName,
               giftEmoji: emoji,
               coins,
             },
@@ -1017,6 +1022,19 @@ export function GameScreen({
     return sorted;
   }, [likeLeaders]);
 
+  const totalStreamCoins = useMemo(
+    () => Object.values(giftLeaders).reduce((acc, item) => acc + item.coins, 0),
+    [giftLeaders]
+  );
+
+  const totalStreamLikes = useMemo(
+    () => Object.values(likeLeaders).reduce((acc, item) => acc + item.likes, 0),
+    [likeLeaders]
+  );
+
+  const maxCoinLeader = Math.max(1, topGifters[0]?.coins || 1);
+  const maxLikeLeader = Math.max(1, topLikers[0]?.likes || 1);
+
   // Skin background resolution (dark neon space by default)
   const skinBg = sessionState?.skin?.backgroundMode || 'neon';
   const accentColor = sessionState?.skin?.accentColor || '#7C3AED';
@@ -1473,13 +1491,16 @@ export function GameScreen({
         {/* Symmetrical Top Game HUD */}
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 pb-2">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-base shadow-sm backdrop-blur-md">
-              {game.emoji}
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/10 shadow-sm backdrop-blur-md">
+              <CustomGameEmblem slug={activeSlug} size={22} />
             </span>
             <div className="min-w-0">
               <div className="truncate font-display text-[11px] font-extrabold leading-tight">{game.title}</div>
-              <div className="truncate text-[9px] font-semibold text-violet-300">
-                🏆 @{topLeaderboard[0]?.username || 'чат'} · {topLeaderboard[0]?.points || 0}
+              <div className="flex items-center gap-1 truncate text-[9px] font-semibold text-violet-300">
+                <CustomTrophyIcon size={10} />
+                <span className="truncate">
+                  @{topLeaderboard[0]?.username || 'чат'} · {topLeaderboard[0]?.points || 0}
+                </span>
               </div>
             </div>
           </div>
@@ -1526,8 +1547,8 @@ export function GameScreen({
             <div className="flex min-w-0 items-center gap-2">
               <div className="relative shrink-0">
                 <PlayerAvatar avatar={giftSpotlight.avatar} username={giftSpotlight.username} size="md" accent="amber" />
-                <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-400 text-[9px] text-black shadow">
-                  <Crown className="h-2.5 w-2.5" />
+                <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-[#120E24] p-0.5 shadow">
+                  <CustomCoinIcon size={12} />
                 </span>
               </div>
               <div className="min-w-0">
@@ -1535,14 +1556,17 @@ export function GameScreen({
                 <div className="truncate text-[10px] font-semibold text-amber-100">
                   подарил(а) {giftSpotlight.giftName}
                 </div>
-                <span className="mt-0.5 inline-block rounded-full bg-black/25 px-1.5 py-0.5 text-[9px] font-bold text-amber-200">
-                  {giftSpotlight.effectText}
+                <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-black/30 px-1.5 py-0.5 text-[9px] font-bold text-amber-200">
+                  {giftSpotlight.coins >= 25 ? <CustomBoltIcon size={10} /> : <CustomSparkIcon size={10} />}
+                  <span>{giftSpotlight.effectText}</span>
                 </span>
               </div>
             </div>
-            <div className="flex shrink-0 flex-col items-center rounded-xl bg-black/25 px-2.5 py-1 text-center">
-              <span className="text-xl leading-none">{giftSpotlight.giftEmoji}</span>
-              <span className="mt-0.5 font-mono text-[10px] font-black text-amber-300">💎 +{giftSpotlight.coins}</span>
+            <div className="flex shrink-0 flex-col items-center rounded-xl border border-white/15 bg-black/30 px-2.5 py-1 text-center">
+              <CustomGiftIcon giftName={giftSpotlight.giftName} coins={giftSpotlight.coins} size={24} />
+              <span className="mt-0.5 inline-flex items-center gap-0.5 font-mono text-[10px] font-black text-amber-300">
+                <CustomCoinIcon size={10} /> +{giftSpotlight.coins}
+              </span>
             </div>
           </div>
         ) : (
@@ -1565,8 +1589,9 @@ export function GameScreen({
         {roundWinner && (
           <div className="animate-spring-pop mb-2 rounded-2xl border-2 border-emerald-400 bg-gradient-to-r from-emerald-600 to-teal-600 p-2.5 text-center text-white shadow-soft">
             <div className="text-[10px] font-bold uppercase tracking-wider opacity-90">Раунд завершён!</div>
-            <div className="font-display text-sm font-extrabold">
-              🎉 @{roundWinner.user} — {roundWinner.answer}
+            <div className="flex items-center justify-center gap-1.5 font-display text-sm font-extrabold">
+              <CustomTrophyIcon size={16} />
+              <span>@{roundWinner.user} — {roundWinner.answer}</span>
             </div>
             {nextRoundCountdown !== null && (
               <div className="mt-0.5 text-[10px] font-semibold opacity-90">
@@ -1587,62 +1612,110 @@ export function GameScreen({
           {renderGameBody()}
         </div>
 
-        {/* Bottom Symmetrical Dual Leaderboards: Gifts Left / Likes Right */}
+        {/* Bottom Symmetrical Dual Leaderboards: Top Coins Left / Top Likes Right */}
         <div className="mt-2 space-y-1.5">
           <div className="grid grid-cols-2 gap-2">
-            {/* LEFT: Top Gifters */}
+            {/* LEFT: ТОП МОНЕТ */}
             <div
               className={`flex flex-col rounded-2xl border p-2 backdrop-blur-md ${
                 isDarkSurface
-                  ? 'border-amber-400/25 bg-gradient-to-b from-amber-500/15 to-rose-500/5 text-white'
+                  ? 'border-amber-400/30 bg-gradient-to-b from-amber-500/15 via-[#18102A]/90 to-rose-500/10 text-white'
                   : 'border-amber-200 bg-white/95 text-[#11101C] shadow-sm'
               }`}
             >
-              <div className="mb-1 flex items-center justify-between border-b border-white/10 pb-1">
-                <span className="text-[9px] font-black uppercase tracking-wider text-amber-300">🎁 ТОП ПОДАРКОВ</span>
-                <Trophy className="h-3 w-3 text-amber-300" />
+              <div className="mb-1.5 flex items-center justify-between border-b border-white/10 pb-1">
+                <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-amber-300">
+                  <CustomCoinIcon size={12} />
+                  <span>ТОП МОНЕТ</span>
+                </span>
+                <span className="rounded-md bg-amber-400/15 px-1.5 py-0.5 font-mono text-[9px] font-extrabold text-amber-200">
+                  {totalStreamCoins}
+                </span>
               </div>
               <div className="space-y-1">
-                {topGifters.map((g, idx) => (
-                  <div key={`${g.username}-${idx}`} className="flex items-center justify-between gap-1 text-[10px] leading-tight">
-                    <div className="flex min-w-0 items-center gap-1">
-                      <span className="shrink-0 text-[10px]">{idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉'}</span>
-                      <PlayerAvatar avatar={g.avatar} username={g.username} size="xs" accent="amber" />
-                      <span className="truncate font-bold">{g.username === '—' ? '—' : `@${g.username}`}</span>
+                {topGifters.map((g, idx) => {
+                  const pct = g.coins > 0 ? Math.max(14, Math.round((g.coins / maxCoinLeader) * 100)) : 0;
+                  return (
+                    <div
+                      key={`${g.username}-${idx}`}
+                      className="relative flex items-center justify-between gap-1 overflow-hidden rounded-lg bg-black/20 px-1.5 py-0.5 text-[10px] leading-tight"
+                    >
+                      {pct > 0 && (
+                        <div
+                          className="pointer-events-none absolute inset-y-0 left-0 bg-gradient-to-r from-amber-400/25 to-rose-500/10 transition-all duration-500"
+                          style={{ width: `${pct}%` }}
+                        />
+                      )}
+                      <div className="relative flex min-w-0 items-center gap-1">
+                        <CustomRankBadge rank={(idx + 1) as 1 | 2 | 3} size={14} />
+                        <PlayerAvatar avatar={g.avatar} username={g.username} size="xs" accent="amber" />
+                        <span className="truncate font-bold">{g.username === '—' ? '—' : `@${g.username}`}</span>
+                      </div>
+                      <span className="relative inline-flex shrink-0 items-center gap-0.5 font-mono text-[10px] font-extrabold text-amber-300">
+                        {g.coins > 0 ? (
+                          <>
+                            <CustomCoinIcon size={10} />
+                            <span>{g.coins}</span>
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </span>
                     </div>
-                    <span className="shrink-0 font-mono text-[10px] font-extrabold text-amber-300">
-                      {g.coins > 0 ? `${g.lastEmoji}${g.coins}` : '—'}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
-            {/* RIGHT: Top Likers */}
+            {/* RIGHT: ТОП ЛАЙКОВ */}
             <div
               className={`flex flex-col rounded-2xl border p-2 backdrop-blur-md ${
                 isDarkSurface
-                  ? 'border-pink-400/25 bg-gradient-to-b from-pink-500/15 to-cyan-500/5 text-white'
+                  ? 'border-pink-400/30 bg-gradient-to-b from-pink-500/15 via-[#18102A]/90 to-cyan-500/10 text-white'
                   : 'border-pink-200 bg-white/95 text-[#11101C] shadow-sm'
               }`}
             >
-              <div className="mb-1 flex items-center justify-between border-b border-white/10 pb-1">
-                <span className="text-[9px] font-black uppercase tracking-wider text-pink-300">❤️ ТОП ЛАЙКОВ</span>
-                <Heart className="h-3 w-3 text-pink-400" />
+              <div className="mb-1.5 flex items-center justify-between border-b border-white/10 pb-1">
+                <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-pink-300">
+                  <CustomHeartIcon size={12} />
+                  <span>ТОП ЛАЙКОВ</span>
+                </span>
+                <span className="rounded-md bg-pink-500/15 px-1.5 py-0.5 font-mono text-[9px] font-extrabold text-pink-200">
+                  {totalStreamLikes}
+                </span>
               </div>
               <div className="space-y-1">
-                {topLikers.map((l, idx) => (
-                  <div key={`${l.username}-${idx}`} className="flex items-center justify-between gap-1 text-[10px] leading-tight">
-                    <div className="flex min-w-0 items-center gap-1">
-                      <span className="shrink-0 text-[10px]">{idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉'}</span>
-                      <PlayerAvatar avatar={l.avatar} username={l.username} size="xs" accent="rose" />
-                      <span className="truncate font-bold">{l.username === '—' ? '—' : `@${l.username}`}</span>
+                {topLikers.map((l, idx) => {
+                  const pct = l.likes > 0 ? Math.max(14, Math.round((l.likes / maxLikeLeader) * 100)) : 0;
+                  return (
+                    <div
+                      key={`${l.username}-${idx}`}
+                      className="relative flex items-center justify-between gap-1 overflow-hidden rounded-lg bg-black/20 px-1.5 py-0.5 text-[10px] leading-tight"
+                    >
+                      {pct > 0 && (
+                        <div
+                          className="pointer-events-none absolute inset-y-0 left-0 bg-gradient-to-r from-pink-500/25 to-cyan-400/10 transition-all duration-500"
+                          style={{ width: `${pct}%` }}
+                        />
+                      )}
+                      <div className="relative flex min-w-0 items-center gap-1">
+                        <CustomRankBadge rank={(idx + 1) as 1 | 2 | 3} size={14} />
+                        <PlayerAvatar avatar={l.avatar} username={l.username} size="xs" accent="rose" />
+                        <span className="truncate font-bold">{l.username === '—' ? '—' : `@${l.username}`}</span>
+                      </div>
+                      <span className="relative inline-flex shrink-0 items-center gap-0.5 font-mono text-[10px] font-extrabold text-pink-300">
+                        {l.likes > 0 ? (
+                          <>
+                            <CustomHeartIcon size={10} />
+                            <span>{l.likes}</span>
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </span>
                     </div>
-                    <span className="shrink-0 font-mono text-[10px] font-extrabold text-pink-300">
-                      {l.likes > 0 ? `❤️${l.likes}` : '—'}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1658,7 +1731,7 @@ export function GameScreen({
                 <div
                   key={c.id}
                   className={`animate-spring-pop flex items-center justify-between gap-1.5 rounded-lg px-1.5 py-0.5 ${
-                    c.isGift ? 'bg-gradient-to-r from-pink-500/20 to-amber-500/15 text-amber-100' : ''
+                    c.isGift ? 'border border-amber-400/20 bg-gradient-to-r from-pink-500/20 to-amber-500/15 text-amber-100' : ''
                   }`}
                 >
                   <div className="flex min-w-0 items-center gap-1.5">
@@ -1674,8 +1747,10 @@ export function GameScreen({
                     <span className="truncate font-medium">{c.text}</span>
                   </div>
                   {c.isGift && c.coins ? (
-                    <span className="shrink-0 font-mono text-[9px] font-black text-amber-300">
-                      {c.giftEmoji || '🎁'} +{c.coins}
+                    <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[9px] font-black text-amber-300">
+                      <CustomGiftIcon giftName={c.giftName || ''} coins={c.coins} size={13} />
+                      <CustomCoinIcon size={9} />
+                      <span>+{c.coins}</span>
                     </span>
                   ) : null}
                 </div>
@@ -1826,28 +1901,28 @@ export function GameScreen({
                 onClick={() => sendSimGift('Роза', 1, '🌹')}
                 className="inline-flex items-center gap-1 rounded-xl border border-rose-500/30 bg-rose-500/15 px-2.5 py-1.5 text-[11px] font-bold text-rose-300"
               >
-                <Gift className="h-3 w-3" /> 🌹 Роза (1)
+                <CustomGiftIcon giftName="Роза" coins={1} size={14} /> Роза (1)
               </button>
               <button
                 type="button"
                 onClick={() => sendSimGift('Сердце', 5, '🫰')}
                 className="inline-flex items-center gap-1 rounded-xl border border-amber-500/30 bg-amber-500/15 px-2.5 py-1.5 text-[11px] font-bold text-amber-300"
               >
-                🫰 Сердце (5)
+                <CustomGiftIcon giftName="Сердце" coins={5} size={14} /> Сердце (5)
               </button>
               <button
                 type="button"
                 onClick={() => sendSimGift('Пончик', 30, '🍩')}
                 className="inline-flex items-center gap-1 rounded-xl border border-violet-500/30 bg-violet-500/15 px-2.5 py-1.5 text-[11px] font-bold text-violet-300"
               >
-                🍩 Пончик (30)
+                <CustomGiftIcon giftName="Пончик" coins={30} size={14} /> Пончик (30)
               </button>
               <button
                 type="button"
                 onClick={() => sendSimLike(50)}
                 className="inline-flex items-center gap-1 rounded-xl border border-pink-500/30 bg-pink-500/15 px-2.5 py-1.5 text-[11px] font-bold text-pink-300"
               >
-                <Heart className="h-3 w-3" /> Лайк (+50)
+                <CustomHeartIcon size={13} /> Лайк (+50)
               </button>
             </div>
 
