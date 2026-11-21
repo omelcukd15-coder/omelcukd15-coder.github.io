@@ -3,6 +3,7 @@
   "name": "vibeplay-live",
   "main": "cloudflare-worker.js",
   "compatibility_date": "2026-11-20",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./cloudflare-dist",
     "binding": "ASSETS",

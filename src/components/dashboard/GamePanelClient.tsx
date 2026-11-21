@@ -17,7 +17,7 @@ import { GAMES, getGameBySlug } from '@/lib/games-data';
 import { Lang } from '@/lib/i18n';
 import { GameScreen } from '@/components/game-engine/GameScreen';
 import { SessionState } from '@/lib/server/liveHub';
-import { apiUrl } from '@/lib/api';
+import { apiUrl, resolveBackendOrigin } from '@/lib/api';
 
 export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
   const token = 'streamer-demo';
@@ -37,24 +37,31 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
 
   useEffect(() => {
     setOrigin(window.location.origin);
+    let saved = '';
     try {
-      const saved = localStorage.getItem('vp_tiktok_nick');
+      saved = localStorage.getItem('vp_tiktok_nick') || '';
       if (saved) setTiktokNick(saved);
     } catch {
       // ignore
     }
-    fetch(apiUrl(`/api/live/stream?token=${token}&mode=json`))
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.state) setSessionState(d.state);
-      })
-      .catch(() => {});
+    resolveBackendOrigin().then(() => {
+      const userQ = saved ? `&username=${encodeURIComponent(saved)}` : '';
+      fetch(apiUrl(`/api/live/stream?token=${token}&mode=json${userQ}`))
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.state) {
+            setSessionState(d.state);
+            postToChannel({ type: 'session_state', state: d.state });
+          }
+        })
+        .catch(() => {});
 
-    fetch(apiUrl('/api/live/event'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, type: 'control', action: 'set_game', payload: { slug } }),
-    }).catch(() => {});
+      fetch(apiUrl('/api/live/event'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, type: 'control', action: 'set_game', payload: { slug } }),
+      }).catch(() => {});
+    });
   }, [slug]);
 
   const playPath = `/play/${token}/${game.slug}`;
@@ -84,14 +91,21 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
     e.preventDefault();
     setConnecting(true);
     try {
-      localStorage.setItem('vp_tiktok_nick', tiktokNick);
+      await resolveBackendOrigin();
+      localStorage.setItem('vp_tiktok_nick', tiktokNick.trim());
       const res = await fetch(apiUrl('/api/live/connect'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token, action: 'connect', username: tiktokNick }),
       });
       const data = await res.json();
-      if (data.state) setSessionState(data.state);
+      if (data.state) {
+        setSessionState(data.state);
+        postToChannel({ type: 'session_state', state: data.state });
+        if (Array.isArray(data.state.recentEvents)) {
+          [...data.state.recentEvents].reverse().forEach((ev: unknown) => postToChannel({ event: ev }));
+        }
+      }
     } finally {
       setConnecting(false);
     }

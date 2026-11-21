@@ -3,12 +3,27 @@ import { liveHub } from '@/lib/server/liveHub';
 
 export const dynamic = 'force-dynamic';
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}
+
 export async function GET(req: NextRequest) {
   const token = req.nextUrl.searchParams.get('token') || 'streamer-demo';
   const mode = req.nextUrl.searchParams.get('mode') || 'sse';
+  const username = req.nextUrl.searchParams.get('username') || '';
+
+  if (username.trim()) {
+    await liveHub.ensureConnected(token, username);
+  }
 
   if (mode === 'json') {
-    return NextResponse.json({ ok: true, state: liveHub.getState(token) });
+    return NextResponse.json({ ok: true, state: liveHub.getState(token) }, { headers: CORS_HEADERS });
   }
 
   const encoder = new TextEncoder();
@@ -50,6 +65,7 @@ export async function GET(req: NextRequest) {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      ...CORS_HEADERS,
     },
   });
 }

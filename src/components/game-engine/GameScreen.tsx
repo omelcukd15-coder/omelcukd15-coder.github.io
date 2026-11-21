@@ -39,7 +39,8 @@ import {
 } from '@/lib/games-data';
 import { LiveEvent, SessionState } from '@/lib/server/liveHub';
 import { soundEngine } from '@/lib/sound';
-import { apiUrl } from '@/lib/api';
+import { apiUrl, resolveBackendOrigin } from '@/lib/api';
+import { fetchWebcastBatchFast } from '@/lib/tiktokWebcastReader';
 import { CanvasArena } from './CanvasArenas';
 
 export interface GameScreenProps {
@@ -164,6 +165,8 @@ export function GameScreen({
   ]);
 
   const processedIdsRef = useRef<Set<string>>(new Set());
+  const webcastCursorRef = useRef<string>('');
+  const seenEventIdsRef = useRef<Set<string>>(new Set());
 
   const triggerBanner = useCallback((text: string, tone: 'gift' | 'win' | 'info') => {
     setEventBanner({ text, tone });
@@ -344,6 +347,7 @@ export function GameScreen({
         const msg = ev.message.trim();
         const lower = msg.toLowerCase();
         setChatFeed((prev) => [{ id: ev.id, user: ev.username, text: msg }, ...prev].slice(0, 8));
+        soundEngine.playGuess();
 
         if (paused || roundWinner) return;
 
@@ -449,39 +453,87 @@ export function GameScreen({
     [activeSlug, applyControlAction, egeFilter, logoBlur, paused, roundIdx, roundWinner, startNewRound, triggerBanner, triggerWin]
   );
 
-  // Connect to SSE stream + BroadcastChannel + fallback JSON poll (resilient for Cloudflare Edge)
+  // Connect to SSE stream + BroadcastChannel + fallback JSON poll (resilient for Cloudflare Edge & GitHub Pages)
   const [localBots, setLocalBots] = useState(initialBots);
+
+  // Restore saved TikTok username from localStorage once on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('vp_tiktok_nick');
+      if (saved && !tiktokInput) setTiktokInput(saved);
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let es: EventSource | null = null;
     let bc: BroadcastChannel | null = null;
-    try {
-      es = new EventSource(apiUrl(`/api/live/stream?token=${encodeURIComponent(token)}`));
-      es.onmessage = (msg) => {
-        try {
-          const parsed = JSON.parse(msg.data) as { event?: LiveEvent; state?: SessionState };
-          if (parsed.state) {
-            setSessionState(parsed.state);
-            if (parsed.state.tiktokUsername && !tiktokInput) {
-              setTiktokInput(parsed.state.tiktokUsername);
+    let poll: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+
+    const cleanUser = tiktokInput.trim();
+    const userParam = cleanUser ? `&username=${encodeURIComponent(cleanUser)}` : '';
+
+    const setup = async () => {
+      await resolveBackendOrigin();
+      if (cancelled) return;
+
+      try {
+        es = new EventSource(apiUrl(`/api/live/stream?token=${encodeURIComponent(token)}${userParam}`));
+        es.onmessage = (msg) => {
+          try {
+            const parsed = JSON.parse(msg.data) as { event?: LiveEvent; state?: SessionState };
+            if (parsed.state) {
+              setSessionState(parsed.state);
+              if (parsed.state.tiktokUsername && !tiktokInput) {
+                setTiktokInput(parsed.state.tiktokUsername);
+              }
             }
+            if (parsed.event) {
+              processEvent(parsed.event);
+            }
+          } catch {
+            // ignore parse error
           }
-          if (parsed.event) {
-            processEvent(parsed.event);
-          }
-        } catch {
-          // ignore parse error
-        }
+        };
+      } catch {
+        // ignore SSE failures
+      }
+
+      const fetchSnapshot = () => {
+        fetch(apiUrl(`/api/live/stream?token=${encodeURIComponent(token)}&mode=json${userParam}`))
+          .then((r) => r.json())
+          .then((d: { state?: SessionState }) => {
+            if (d?.state) {
+              setSessionState(d.state);
+              if (d.state.tiktokUsername && !tiktokInput) {
+                setTiktokInput(d.state.tiktokUsername);
+              }
+              if (Array.isArray(d.state.recentEvents)) {
+                [...d.state.recentEvents].reverse().forEach((ev) => processEvent(ev));
+              }
+            }
+          })
+          .catch(() => {});
       };
-    } catch {
-      // ignore SSE failures
-    }
+
+      fetchSnapshot();
+      poll = setInterval(fetchSnapshot, 2200);
+    };
+
+    void setup();
 
     try {
       bc = new BroadcastChannel(`vibeplay_${token}`);
       bc.onmessage = (msg) => {
         if (msg.data?.type === 'toggle_bots') {
           setLocalBots(Boolean(msg.data.enabled));
+        } else if (msg.data?.type === 'session_state' && msg.data?.state) {
+          const nextState = msg.data.state as SessionState;
+          setSessionState(nextState);
+          if (nextState.tiktokUsername) setTiktokInput(nextState.tiktokUsername);
         } else if (msg.data?.event) {
           processEvent(msg.data.event as LiveEvent);
         }
@@ -490,26 +542,74 @@ export function GameScreen({
       // ignore BroadcastChannel failures
     }
 
-    const poll = setInterval(() => {
-      fetch(apiUrl(`/api/live/stream?token=${encodeURIComponent(token)}&mode=json`))
-        .then((r) => r.json())
-        .then((d: { state?: SessionState }) => {
-          if (d?.state) {
-            setSessionState(d.state);
-            if (Array.isArray(d.state.recentEvents)) {
-              [...d.state.recentEvents].reverse().forEach((ev) => processEvent(ev));
-            }
-          }
-        })
-        .catch(() => {});
-    }, 3000);
-
     return () => {
+      cancelled = true;
       es?.close();
       bc?.close();
-      clearInterval(poll);
+      if (poll) clearInterval(poll);
     };
   }, [token, processEvent, tiktokInput]);
+
+  // Direct browser-side EulerStream CORS polling when connected to a live room
+  useEffect(() => {
+    if (sessionState?.connectionStatus !== 'connected' || !sessionState?.roomId) return;
+    const activeRoomId = sessionState.roomId;
+    webcastCursorRef.current = '';
+    let cancelled = false;
+    let inFlight = false;
+
+    const pullBatch = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const batch = await fetchWebcastBatchFast(activeRoomId, webcastCursorRef.current, 750);
+        if (cancelled) return;
+        if (batch.cursor) {
+          webcastCursorRef.current = batch.cursor;
+        }
+        if (typeof batch.viewerCount === 'number' && batch.viewerCount > 0) {
+          const vc = batch.viewerCount;
+          setSessionState((prev) =>
+            prev
+              ? { ...prev, viewerCount: vc, peakViewers: Math.max(prev.peakViewers, vc) }
+              : prev
+          );
+          fetch(apiUrl('/api/live/event'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, type: 'viewer_count', viewerCount: vc }),
+          }).catch(() => {});
+        }
+        for (const ev of batch.events) {
+          if (seenEventIdsRef.current.has(ev.id) || processedIdsRef.current.has(ev.id)) {
+            continue;
+          }
+          seenEventIdsRef.current.add(ev.id);
+          if (seenEventIdsRef.current.size > 600) {
+            const first = seenEventIdsRef.current.values().next().value;
+            if (first) seenEventIdsRef.current.delete(first);
+          }
+          processEvent(ev as LiveEvent);
+          fetch(apiUrl('/api/live/event'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, ...ev, id: ev.id }),
+          }).catch(() => {});
+        }
+      } catch {
+        // Ignore transient CORS / network glitches; next interval retries
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void pullBatch();
+    const timer = setInterval(pullBatch, 2800);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [sessionState?.connectionStatus, sessionState?.roomId, token, processEvent]);
 
   // Client-safe bot ticker (works both on localhost and Cloudflare Edge)
   useEffect(() => {
@@ -590,13 +690,24 @@ export function GameScreen({
     e.preventDefault();
     setConnecting(true);
     try {
+      await resolveBackendOrigin();
+      try {
+        localStorage.setItem('vp_tiktok_nick', tiktokInput.trim());
+      } catch {
+        // ignore
+      }
       const res = await fetch(apiUrl('/api/live/connect'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token, action: 'connect', username: tiktokInput }),
       });
       const data = await res.json();
-      if (data.state) setSessionState(data.state);
+      if (data.state) {
+        setSessionState(data.state);
+        if (Array.isArray(data.state.recentEvents)) {
+          [...data.state.recentEvents].reverse().forEach((ev: LiveEvent) => processEvent(ev));
+        }
+      }
     } finally {
       setConnecting(false);
     }
@@ -1218,11 +1329,21 @@ export function GameScreen({
             </div>
           </div>
 
-          <div className={`flex items-center gap-2 overflow-hidden rounded-xl px-2.5 py-1 text-[11px] ${isDarkSurface ? 'bg-black/30' : 'bg-black/5'}`}>
-            <MessageSquare className="h-3 w-3 shrink-0 opacity-60" />
-            <span className="truncate font-medium">
-              {chatFeed[0] ? `@${chatFeed[0].user}: ${chatFeed[0].text}` : 'Напишите сообщение в чат TikTok...'}
-            </span>
+          <div className={`space-y-1 rounded-xl border px-2.5 py-1.5 text-[11px] backdrop-blur-md ${isDarkSurface ? 'border-white/10 bg-black/40 text-slate-200' : 'border-slate-200 bg-black/5'}`}>
+            {chatFeed.length > 0 ? (
+              chatFeed.slice(0, 3).map((c) => (
+                <div key={c.id} className="animate-spring-pop flex items-center gap-1.5 truncate">
+                  <MessageSquare className="h-3 w-3 shrink-0 text-cyan-400" />
+                  <span className="font-bold text-violet-300">@{c.user}:</span>
+                  <span className="truncate font-medium">{c.text}</span>
+                </div>
+              ))
+            ) : (
+              <div className="flex items-center gap-1.5 opacity-70">
+                <MessageSquare className="h-3 w-3 shrink-0" />
+                <span>Напишите сообщение в чат TikTok...</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
