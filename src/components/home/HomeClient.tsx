@@ -365,7 +365,7 @@ export function HomeClient({ lang }: { lang: Lang }) {
                   {dict.common.details}
                 </Link>
                 <Link
-                  href={`/play/streamer-demo/${g.slug}`}
+                  href={`/play/live/${g.slug}`}
                   className="rounded-xl bg-[#7C3AED] px-3 py-2 text-xs font-bold text-white transition hover:bg-[#6D28D9]"
                 >
                   Играть

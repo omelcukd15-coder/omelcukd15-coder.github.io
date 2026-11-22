@@ -16,7 +16,7 @@ export async function OPTIONS() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const token = String(body.token || 'streamer-demo');
+    const token = String(body.token || 'live');
     const type = String(body.type || 'chat');
     const externalId = typeof body.id === 'string' && body.id.trim() ? body.id.trim() : undefined;
 
@@ -71,7 +71,8 @@ export async function POST(req: NextRequest) {
     if (type === 'like') {
       const username = String(body.username || 'Зритель');
       const likeCount = Number(body.likeCount || 1);
-      const event = liveHub.pushLikeEvent(token, username, likeCount, externalId);
+      const avatar = typeof body.avatar === 'string' ? body.avatar : undefined;
+      const event = liveHub.pushLikeEvent(token, username, likeCount, externalId, avatar);
       return NextResponse.json(
         { ok: Boolean(event), event, state: liveHub.getState(token) },
         { headers: CORS_HEADERS }

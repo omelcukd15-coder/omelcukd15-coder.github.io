@@ -3,7 +3,10 @@ import { GAMES, getGameBySlug } from '@/lib/games-data';
 import { GameScreen } from '@/components/game-engine/GameScreen';
 
 export function generateStaticParams() {
-  return GAMES.map((g) => ({ token: 'streamer-demo', slug: g.slug }));
+  return [
+    ...GAMES.map((g) => ({ token: 'live', slug: g.slug })),
+    ...GAMES.map((g) => ({ token: 'streamer-demo', slug: g.slug })),
+  ];
 }
 
 export async function generateMetadata({

@@ -73,7 +73,7 @@ export default function GameDetailPage({ params }: { params: { lang: Lang; slug:
                 <span>{dict.common.launchLive}</span>
               </Link>
               <Link
-                href={`/play/streamer-demo/${game.slug}`}
+                href={`/play/live/${game.slug}`}
                 className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/[0.06] px-6 py-4 text-base font-bold text-white hover:bg-white/[0.12]"
               >
                 <span>📱 Открыть на весь экран</span>

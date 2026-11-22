@@ -50,6 +50,7 @@ import { LiveEvent, SessionState } from '@/lib/server/liveHub';
 import { soundEngine } from '@/lib/sound';
 import { apiUrl, resolveBackendOrigin } from '@/lib/api';
 import { fetchWebcastBatchFast } from '@/lib/tiktokWebcastReader';
+import { getStreamerToken, normalizeNick, saveStreamerProfile } from '@/lib/streamerSession';
 import { CanvasArena } from './CanvasArenas';
 
 export interface GameScreenProps {
@@ -170,13 +171,14 @@ function computeSemanticRank(guess: string, targetObj: (typeof CONTEXTO_WORDS)[n
 
 export function GameScreen({
   slug,
-  token = 'streamer-demo',
+  token = 'live',
   mode = 'preview',
   externalControl = null,
   onSlugChange,
   initialBots = false,
 }: GameScreenProps) {
   const [activeSlug, setActiveSlug] = useState(slug);
+  const [effectiveToken, setEffectiveToken] = useState(token);
   useEffect(() => {
     setActiveSlug(slug);
   }, [slug]);
@@ -185,6 +187,8 @@ export function GameScreen({
 
   // Live Hub state
   const [sessionState, setSessionState] = useState<SessionState | null>(null);
+  const sessionStateRef = useRef<SessionState | null>(null);
+  sessionStateRef.current = sessionState;
   const [latestEvent, setLatestEvent] = useState<LiveEvent | null>(null);
   const [eventBanner, setEventBanner] = useState<{ text: string; tone: 'gift' | 'win' | 'info' } | null>(null);
   const [shaking, setShaking] = useState(false);
@@ -206,57 +210,143 @@ export function GameScreen({
   // Round states
   const [roundNum, setRoundNum] = useState(1);
   const [roundIdx, setRoundIdx] = useState(0);
+  const [roundsOnCurrentGame, setRoundsOnCurrentGame] = useState(1);
   const [roundTimer, setRoundTimer] = useState(60);
   const [nextRoundCountdown, setNextRoundCountdown] = useState<number | null>(null);
   const [roundWinner, setRoundWinner] = useState<{ user: string; answer: string } | null>(null);
-  const [localScores, setLocalScores] = useState<Record<string, { username: string; avatar: string; points: number }>>({
-    artem_gg: { username: 'artem_gg', avatar: '🧑‍💻', points: 14 },
-    lera_fox: { username: 'lera_fox', avatar: '🦊', points: 11 },
-    max_turbo: { username: 'max_turbo', avatar: '⚡', points: 8 },
-  });
+  const [localScores, setLocalScores] = useState<Record<string, { username: string; avatar: string; points: number }>>(
+    (): Record<string, { username: string; avatar: string; points: number }> =>
+      initialBots
+        ? {
+            artem_gg: { username: 'artem_gg', avatar: '🧑‍💻', points: 14 },
+            lera_fox: { username: 'lera_fox', avatar: '🦊', points: 11 },
+            max_turbo: { username: 'max_turbo', avatar: '⚡', points: 8 },
+          }
+        : {}
+  );
 
   // Game-specific states
-  const [contextoGuesses, setContextoGuesses] = useState<ContextoGuess[]>([
-    { id: 'seed-1', word: 'планета', rank: 9, user: 'artem_gg' },
-    { id: 'seed-2', word: 'луна', rank: 22, user: 'lera_fox' },
-    { id: 'seed-3', word: 'небо', rank: 65, user: 'max_turbo' },
-  ]);
+  const [contextoGuesses, setContextoGuesses] = useState<ContextoGuess[]>(() =>
+    initialBots
+      ? [
+          { id: 'seed-1', word: 'планета', rank: 9, user: 'artem_gg' },
+          { id: 'seed-2', word: 'луна', rank: 22, user: 'lera_fox' },
+          { id: 'seed-3', word: 'небо', rank: 65, user: 'max_turbo' },
+        ]
+      : []
+  );
   const [revealedLetters, setRevealedLetters] = useState(1);
   const [hintText, setHintText] = useState<string | null>(null);
   const [doodleProgress, setDoodleProgress] = useState(0.25);
   const [freeDrawMode, setFreeDrawMode] = useState(false);
   const [logoBlur, setLogoBlur] = useState(18);
-  const [votes, setVotes] = useState<{ a: number; b: number; balls: VoteBall[] }>({
-    a: 12,
-    b: 9,
-    balls: [
-      { id: 'vb1', user: 'artem', side: 1, size: 28, color: '#6C2BD9' },
-      { id: 'vb2', user: 'lera', side: 2, size: 28, color: '#EC4899' },
-    ],
-  });
+  const [votes, setVotes] = useState<{ a: number; b: number; balls: VoteBall[] }>(() =>
+    initialBots
+      ? {
+          a: 12,
+          b: 9,
+          balls: [
+            { id: 'vb1', user: 'artem', side: 1, size: 28, color: '#6C2BD9' },
+            { id: 'vb2', user: 'lera', side: 2, size: 28, color: '#EC4899' },
+          ],
+        }
+      : { a: 0, b: 0, balls: [] }
+  );
   const [triviaHiddenIndices, setTriviaHiddenIndices] = useState<number[]>([]);
   const [doublePoints, setDoublePoints] = useState(false);
-  const [wordleRows, setWordleRows] = useState<string[]>(['СТРИМ']);
-  const [estimates, setEstimates] = useState<{ user: string; val: number }[]>([
-    { user: 'artem_gg', val: 85000 },
-    { user: 'lera_fox', val: 86420 },
-  ]);
+  const [wordleRows, setWordleRows] = useState<string[]>(() => (initialBots ? ['СТРИМ'] : []));
+  const [estimates, setEstimates] = useState<{ user: string; val: number }[]>(() =>
+    initialBots
+      ? [
+          { user: 'artem_gg', val: 85000 },
+          { user: 'lera_fox', val: 86420 },
+        ]
+      : []
+  );
   const [egeFilter, setEgeFilter] = useState<'ALL' | 'ЕГЭ' | 'ОГЭ'>('ALL');
-  const [giftLeaders, setGiftLeaders] = useState<Record<string, GiftLeaderEntry>>({
-    artem_gg: { username: 'artem_gg', avatar: '🧑‍💻', coins: 120, giftsCount: 2, lastEmoji: '🦁' },
-    lera_fox: { username: 'lera_fox', avatar: '🦊', coins: 45, giftsCount: 3, lastEmoji: '🍩' },
-    max_turbo: { username: 'max_turbo', avatar: '⚡', coins: 15, giftsCount: 3, lastEmoji: '🌹' },
-  });
-  const [likeLeaders, setLikeLeaders] = useState<Record<string, LikeLeaderEntry>>({
-    lera_fox: { username: 'lera_fox', avatar: '🦊', likes: 1420 },
-    artem_gg: { username: 'artem_gg', avatar: '🧑‍💻', likes: 980 },
-    nika_star: { username: 'nika_star', avatar: '🌟', likes: 640 },
-  });
+  const [giftLeaders, setGiftLeaders] = useState<Record<string, GiftLeaderEntry>>(
+    (): Record<string, GiftLeaderEntry> =>
+      initialBots
+        ? {
+            artem_gg: { username: 'artem_gg', avatar: '🧑‍💻', coins: 120, giftsCount: 2, lastEmoji: '🦁' },
+            lera_fox: { username: 'lera_fox', avatar: '🦊', coins: 45, giftsCount: 3, lastEmoji: '🍩' },
+            max_turbo: { username: 'max_turbo', avatar: '⚡', coins: 15, giftsCount: 3, lastEmoji: '🌹' },
+          }
+        : {}
+  );
+  const [likeLeaders, setLikeLeaders] = useState<Record<string, LikeLeaderEntry>>(
+    (): Record<string, LikeLeaderEntry> =>
+      initialBots
+        ? {
+            lera_fox: { username: 'lera_fox', avatar: '🦊', likes: 1420 },
+            artem_gg: { username: 'artem_gg', avatar: '🧑‍💻', likes: 980 },
+            nika_star: { username: 'nika_star', avatar: '🌟', likes: 640 },
+          }
+        : {}
+  );
   const [giftSpotlight, setGiftSpotlight] = useState<GiftSpotlight | null>(null);
-  const [chatFeed, setChatFeed] = useState<FeedMessage[]>([
-    { id: 'c1', user: 'artem_gg', avatar: '🧑‍💻', text: 'Всем привет! Го играть 🔥' },
-    { id: 'c2', user: 'lera_fox', avatar: '🦊', text: 'Залетаем в топ!' },
-  ]);
+  const [chatFeed, setChatFeed] = useState<FeedMessage[]>(() =>
+    initialBots
+      ? [
+          { id: 'c1', user: 'artem_gg', avatar: '🧑‍💻', text: 'Всем привет! Го играть 🔥' },
+          { id: 'c2', user: 'lera_fox', avatar: '🦊', text: 'Залетаем в топ!' },
+        ]
+      : []
+  );
+
+  const customContextoPool = useMemo(() => {
+    const items = (sessionState?.customItems || []).filter((i) => i.gameSlug === 'contexto');
+    const mapped = items.map((i) => {
+      const cleanWord = i.answer.trim().toLowerCase();
+      return {
+        word: cleanWord,
+        hints: [i.text.trim() || cleanWord],
+        related: { [cleanWord]: 1 } as Record<string, number>,
+      };
+    });
+    return mapped.length > 0 ? [...mapped, ...CONTEXTO_WORDS] : CONTEXTO_WORDS;
+  }, [sessionState?.customItems]);
+
+  const customRevealPool = useMemo(() => {
+    const items = (sessionState?.customItems || []).filter((i) => i.gameSlug === 'word-reveal');
+    const mapped = items.map((i) => ({
+      word: i.answer.trim().toUpperCase(),
+      category: i.text.trim() || 'Своя тема',
+    }));
+    return mapped.length > 0 ? [...mapped, ...REVEAL_WORDS] : REVEAL_WORDS;
+  }, [sessionState?.customItems]);
+
+  const customTriviaPool = useMemo(() => {
+    const items = (sessionState?.customItems || []).filter((i) => i.gameSlug === 'trivia');
+    const mapped = items.map((i) => {
+      const ans = i.answer.trim();
+      const idx = i.id.split('').reduce((s, c) => s + c.charCodeAt(0), 0) % 4;
+      const fillers = ['Вариант А', 'Вариант Б', 'Вариант В', 'Вариант Г'];
+      const options = fillers.map((f, oIdx) => (oIdx === idx ? ans : f));
+      return {
+        theme: 'Свой вопрос',
+        q: i.text.trim(),
+        options,
+        answerIndex: idx,
+        answerText: ans.toLowerCase(),
+      };
+    });
+    return mapped.length > 0 ? [...mapped, ...TRIVIA_QUESTIONS] : TRIVIA_QUESTIONS;
+  }, [sessionState?.customItems]);
+
+  const customEmojiPool = useMemo(() => {
+    const items = (sessionState?.customItems || []).filter((i) => i.gameSlug === 'emoji-quiz');
+    const mapped = items.map((i) => {
+      const ans = i.answer.trim().toLowerCase();
+      return {
+        emojis: i.text.trim() || '🎯✨',
+        category: 'Свой вопрос',
+        answer: ans,
+        aliases: [ans],
+      };
+    });
+    return mapped.length > 0 ? [...mapped, ...EMOJI_PUZZLES] : EMOJI_PUZZLES;
+  }, [sessionState?.customItems]);
 
   const processedIdsRef = useRef<Set<string>>(new Set());
   const webcastCursorRef = useRef<string>('');
@@ -294,7 +384,7 @@ export function GameScreen({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          token,
+          token: effectiveToken,
           type: 'control',
           action: 'award_point',
           payload: { username, points: pts * mult, win: true },
@@ -303,12 +393,13 @@ export function GameScreen({
 
       triggerBanner(`🏆 ${username} угадал(а): ${answer}!`, 'win');
     },
-    [doublePoints, roundWinner, token, triggerBanner]
+    [doublePoints, effectiveToken, roundWinner, triggerBanner]
   );
 
   const startNewRound = useCallback(() => {
     setRoundNum((n) => n + 1);
     setRoundIdx((i) => i + 1);
+    setRoundsOnCurrentGame((r) => r + 1);
     setRoundWinner(null);
     setNextRoundCountdown(null);
     setRoundTimer(60);
@@ -328,6 +419,7 @@ export function GameScreen({
     (action: string, payload?: Record<string, unknown>) => {
       if (action === 'set_game' && typeof payload?.slug === 'string') {
         setActiveSlug(payload.slug);
+        setRoundsOnCurrentGame(1);
         onSlugChange?.(payload.slug);
         startNewRound();
         return;
@@ -361,7 +453,7 @@ export function GameScreen({
       }
       if (action === 'hint') {
         if (activeSlug === 'contexto') {
-          const item = CONTEXTO_WORDS[roundIdx % CONTEXTO_WORDS.length];
+          const item = customContextoPool[roundIdx % customContextoPool.length];
           const hintWord = item.hints[Math.floor(Math.random() * item.hints.length)];
           const rank = item.related[hintWord] || 12;
           setContextoGuesses((prev) =>
@@ -375,7 +467,7 @@ export function GameScreen({
         } else if (activeSlug === 'logo-quiz') {
           setLogoBlur((b) => Math.max(0, b - 7));
         } else if (activeSlug === 'trivia') {
-          const q = TRIVIA_QUESTIONS[roundIdx % TRIVIA_QUESTIONS.length];
+          const q = customTriviaPool[roundIdx % customTriviaPool.length];
           const wrong = [0, 1, 2, 3].filter((i) => i !== q.answerIndex).slice(0, 2);
           setTriviaHiddenIndices(wrong);
         } else if (activeSlug === 'flag-quiz') {
@@ -385,7 +477,7 @@ export function GameScreen({
           const c = COUNTRY_SCENES[roundIdx % COUNTRY_SCENES.length];
           setHintText(`Континент: ${c.continent}`);
         } else if (activeSlug === 'emoji-quiz') {
-          const puz = EMOJI_PUZZLES[roundIdx % EMOJI_PUZZLES.length];
+          const puz = customEmojiPool[roundIdx % customEmojiPool.length];
           setHintText(`Категория: ${puz.category}, букв: ${puz.answer.length}`);
         } else if (activeSlug === 'ege-oge') {
           const filtered = EGE_OGE_QUESTIONS.filter((e) => egeFilter === 'ALL' || e.exam === egeFilter);
@@ -400,7 +492,7 @@ export function GameScreen({
         }
       }
     },
-    [activeSlug, egeFilter, onSlugChange, roundIdx, startNewRound, triggerBanner]
+    [activeSlug, customContextoPool, customEmojiPool, customTriviaPool, egeFilter, onSlugChange, roundIdx, startNewRound, triggerBanner]
   );
 
   // External control trigger from Dashboard
@@ -445,8 +537,12 @@ export function GameScreen({
         const coins = Math.max(1, ev.coins || 1);
         const emoji = ev.giftEmoji || '🎁';
         const giftName = ev.giftName || 'Подарок';
+        const preset = sessionStateRef.current?.giftPreset || 'light';
+        const giftMult = preset === 'donate' ? 3 : preset === 'hardcore' ? 2 : 1;
+        const roundSkipCoins = 25 * giftMult;
+        const boostCoins = 5 * giftMult;
         const effectText =
-          coins >= 25 ? 'Новый раунд' : coins >= 5 ? 'x2 Очки + Буква' : 'Подсказка';
+          coins >= roundSkipCoins ? 'Новый раунд' : coins >= boostCoins ? 'x2 Очки + Буква' : 'Подсказка';
 
         setGiftLeaders((prev) => {
           const cur = prev[ev.username];
@@ -495,9 +591,9 @@ export function GameScreen({
           ].slice(0, 8)
         );
 
-        if (coins >= 25) {
+        if (coins >= roundSkipCoins) {
           startNewRound();
-        } else if (coins >= 5) {
+        } else if (coins >= boostCoins) {
           setDoublePoints(true);
           applyControlAction('letter');
         } else {
@@ -509,6 +605,14 @@ export function GameScreen({
       if (ev.type === 'chat' && ev.message) {
         const msg = ev.message.trim();
         const lower = msg.toLowerCase();
+        const lowerUser = ev.username.replace(/^@/, '').toLowerCase();
+        const mod = sessionStateRef.current?.moderation;
+        if (mod) {
+          if (mod.bannedUsers.some((u) => u.toLowerCase() === lowerUser)) return;
+          if (mod.mutedUsers.some((u) => u.toLowerCase() === lowerUser)) return;
+          if (mod.stopWords.some((w) => w && lower.includes(w.toLowerCase()))) return;
+          if (mod.profanityOn && ['спам', 'реклама', 'http://', 'https://'].some((w) => lower.includes(w))) return;
+        }
         setChatFeed((prev) =>
           [{ id: ev.id, user: ev.username, avatar: ev.avatar, text: msg }, ...prev].slice(0, 8)
         );
@@ -517,7 +621,7 @@ export function GameScreen({
         if (paused || roundWinner) return;
 
         if (activeSlug === 'contexto') {
-          const targetObj = CONTEXTO_WORDS[roundIdx % CONTEXTO_WORDS.length];
+          const targetObj = customContextoPool[roundIdx % customContextoPool.length];
           const cleanWord = lower.split(/\s+/)[0].replace(/[^а-яёa-z0-9-]/gi, '');
           if (!cleanWord) return;
           const rank = computeSemanticRank(cleanWord, targetObj);
@@ -539,7 +643,7 @@ export function GameScreen({
             triggerWin(ev.username, item.name, 3);
           }
         } else if (activeSlug === 'word-reveal') {
-          const item = REVEAL_WORDS[roundIdx % REVEAL_WORDS.length];
+          const item = customRevealPool[roundIdx % customRevealPool.length];
           if (lower === item.word.toLowerCase()) {
             triggerWin(ev.username, item.word, 4);
           } else if (lower.length === 1 && item.word.toLowerCase().includes(lower)) {
@@ -579,7 +683,7 @@ export function GameScreen({
             ],
           }));
         } else if (activeSlug === 'trivia') {
-          const q = TRIVIA_QUESTIONS[roundIdx % TRIVIA_QUESTIONS.length];
+          const q = customTriviaPool[roundIdx % customTriviaPool.length];
           const numMap: Record<string, number> = { '1': 0, a: 0, а: 0, '2': 1, b: 1, б: 1, '3': 2, c: 2, в: 2, '4': 3, d: 3, г: 3 };
           const chosen = numMap[lower];
           if (chosen === q.answerIndex || lower.includes(q.answerText)) {
@@ -602,7 +706,7 @@ export function GameScreen({
             setEstimates((prev) => [{ user: ev.username, val: num }, ...prev.filter((e) => e.user !== ev.username)].slice(0, 6));
           }
         } else if (activeSlug === 'emoji-quiz') {
-          const puz = EMOJI_PUZZLES[roundIdx % EMOJI_PUZZLES.length];
+          const puz = customEmojiPool[roundIdx % customEmojiPool.length];
           if (puz.aliases.some((a) => lower.includes(a))) {
             triggerWin(ev.username, puz.answer.toUpperCase(), 3);
           }
@@ -615,22 +719,58 @@ export function GameScreen({
         }
       }
     },
-    [activeSlug, applyControlAction, egeFilter, logoBlur, paused, roundIdx, roundWinner, startNewRound, triggerBanner, triggerWin]
+    [
+      activeSlug,
+      applyControlAction,
+      customContextoPool,
+      customEmojiPool,
+      customRevealPool,
+      customTriviaPool,
+      egeFilter,
+      logoBlur,
+      paused,
+      roundIdx,
+      roundWinner,
+      startNewRound,
+      triggerBanner,
+      triggerWin,
+    ]
   );
 
   // Connect to SSE stream + BroadcastChannel + fallback JSON poll (resilient for Cloudflare Edge & GitHub Pages)
   const [localBots, setLocalBots] = useState(initialBots);
 
-  // Restore saved TikTok username from localStorage once on mount
+  // Hydrate room token, TikTok nick, and ?obs=1 flag from URL params or saved streamer session
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('vp_tiktok_nick');
-      if (saved && !tiktokInput) setTiktokInput(saved);
+      const qs = new URLSearchParams(window.location.search);
+      const qRoom = (qs.get('room') || '').trim();
+      const qNick = normalizeNick(qs.get('u') || qs.get('nick') || '');
+      const obsFlag = qs.get('obs') === '1';
+
+      if (obsFlag) {
+        setHideHudForObs(true);
+      }
+
+      const resolvedToken = qRoom
+        ? qRoom
+        : token === 'live' || token === 'streamer-demo'
+        ? getStreamerToken()
+        : token;
+      setEffectiveToken(resolvedToken);
+
+      if (qNick) {
+        setTiktokInput(qNick);
+        saveStreamerProfile({ tiktokUsername: qNick, ...(qRoom ? { token: qRoom } : {}) });
+      } else {
+        const saved = normalizeNick(localStorage.getItem('vp_tiktok_nick') || '');
+        if (saved && !tiktokInput) setTiktokInput(saved);
+      }
     } catch {
-      // ignore
+      // ignore storage/URL errors
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     let es: EventSource | null = null;
@@ -638,7 +778,7 @@ export function GameScreen({
     let poll: ReturnType<typeof setInterval> | null = null;
     let cancelled = false;
 
-    const cleanUser = tiktokInput.trim();
+    const cleanUser = normalizeNick(tiktokInput);
     const userParam = cleanUser ? `&username=${encodeURIComponent(cleanUser)}` : '';
 
     const setup = async () => {
@@ -646,7 +786,7 @@ export function GameScreen({
       if (cancelled) return;
 
       try {
-        es = new EventSource(apiUrl(`/api/live/stream?token=${encodeURIComponent(token)}${userParam}`));
+        es = new EventSource(apiUrl(`/api/live/stream?token=${encodeURIComponent(effectiveToken)}${userParam}`));
         es.onmessage = (msg) => {
           try {
             const parsed = JSON.parse(msg.data) as { event?: LiveEvent; state?: SessionState };
@@ -668,7 +808,7 @@ export function GameScreen({
       }
 
       const fetchSnapshot = () => {
-        fetch(apiUrl(`/api/live/stream?token=${encodeURIComponent(token)}&mode=json${userParam}`))
+        fetch(apiUrl(`/api/live/stream?token=${encodeURIComponent(effectiveToken)}&mode=json${userParam}`))
           .then((r) => r.json())
           .then((d: { state?: SessionState }) => {
             if (d?.state) {
@@ -691,7 +831,7 @@ export function GameScreen({
     void setup();
 
     try {
-      bc = new BroadcastChannel(`vibeplay_${token}`);
+      bc = new BroadcastChannel(`vibeplay_${effectiveToken}`);
       bc.onmessage = (msg) => {
         if (msg.data?.type === 'toggle_bots') {
           setLocalBots(Boolean(msg.data.enabled));
@@ -713,7 +853,73 @@ export function GameScreen({
       bc?.close();
       if (poll) clearInterval(poll);
     };
-  }, [token, processEvent, tiktokInput]);
+  }, [effectiveToken, processEvent, tiktokInput]);
+
+  // Auto-connect and background go-live auto-reconnect every 7s in play mode
+  useEffect(() => {
+    if (mode !== 'play') return;
+    const cleanNick = normalizeNick(tiktokInput);
+    if (!cleanNick) return;
+
+    let cancelled = false;
+    const attemptConnect = async () => {
+      if (cancelled) return;
+      if (sessionStateRef.current?.connectionStatus === 'connected' && sessionStateRef.current?.tiktokUsername?.toLowerCase() === cleanNick.toLowerCase()) {
+        return;
+      }
+      try {
+        await resolveBackendOrigin();
+        const res = await fetch(apiUrl('/api/live/connect'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: effectiveToken, action: 'connect', username: cleanNick }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!cancelled && data?.state) {
+          setSessionState(data.state);
+          if (Array.isArray(data.state.recentEvents)) {
+            [...data.state.recentEvents].reverse().forEach((ev: LiveEvent) => processEvent(ev));
+          }
+        }
+      } catch {
+        // Retry silently on next interval
+      }
+    };
+
+    void attemptConnect();
+    const retryTimer = setInterval(attemptConnect, 7000);
+    return () => {
+      cancelled = true;
+      clearInterval(retryTimer);
+    };
+  }, [mode, effectiveToken, tiktokInput, processEvent]);
+
+  // Autopilot Playlist rotation (by rounds or minutes)
+  useEffect(() => {
+    const pl = sessionState?.playlist;
+    if (!pl?.autopilot || !Array.isArray(pl.queueSlugs) || pl.queueSlugs.length < 2) return;
+    if (pl.rotateBy === 'rounds' && roundsOnCurrentGame > Math.max(1, pl.rotateInterval || 3)) {
+      const idx = pl.queueSlugs.indexOf(activeSlug);
+      const nextSlug = pl.queueSlugs[(idx + 1) % pl.queueSlugs.length] || pl.queueSlugs[0];
+      if (nextSlug && nextSlug !== activeSlug) {
+        applyControlAction('set_game', { slug: nextSlug });
+      }
+    }
+  }, [roundsOnCurrentGame, sessionState?.playlist, activeSlug, applyControlAction]);
+
+  useEffect(() => {
+    const pl = sessionState?.playlist;
+    if (!pl?.autopilot || pl.rotateBy !== 'minutes' || !Array.isArray(pl.queueSlugs) || pl.queueSlugs.length < 2) return;
+    const ms = Math.max(1, pl.rotateInterval || 3) * 60_000;
+    const timer = setInterval(() => {
+      const idx = pl.queueSlugs.indexOf(activeSlug);
+      const nextSlug = pl.queueSlugs[(idx + 1) % pl.queueSlugs.length] || pl.queueSlugs[0];
+      if (nextSlug && nextSlug !== activeSlug) {
+        applyControlAction('set_game', { slug: nextSlug });
+      }
+    }, ms);
+    return () => clearInterval(timer);
+  }, [sessionState?.playlist, activeSlug, applyControlAction]);
 
   // Direct browser-side EulerStream CORS polling when connected to a live room
   useEffect(() => {
@@ -742,7 +948,7 @@ export function GameScreen({
           fetch(apiUrl('/api/live/event'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, type: 'viewer_count', viewerCount: vc }),
+            body: JSON.stringify({ token: effectiveToken, type: 'viewer_count', viewerCount: vc }),
           }).catch(() => {});
         }
         for (const ev of batch.events) {
@@ -758,7 +964,7 @@ export function GameScreen({
           fetch(apiUrl('/api/live/event'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, ...ev, id: ev.id }),
+            body: JSON.stringify({ token: effectiveToken, ...ev, id: ev.id }),
           }).catch(() => {});
         }
       } catch {
@@ -774,7 +980,7 @@ export function GameScreen({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [sessionState?.connectionStatus, sessionState?.roomId, token, processEvent]);
+  }, [sessionState?.connectionStatus, sessionState?.roomId, effectiveToken, processEvent]);
 
   // Client-safe bot ticker (works both on localhost and Cloudflare Edge)
   useEffect(() => {
@@ -883,15 +1089,12 @@ export function GameScreen({
     setConnecting(true);
     try {
       await resolveBackendOrigin();
-      try {
-        localStorage.setItem('vp_tiktok_nick', tiktokInput.trim());
-      } catch {
-        // ignore
-      }
+      const cleanNick = normalizeNick(tiktokInput);
+      saveStreamerProfile({ tiktokUsername: cleanNick, token: effectiveToken });
       const res = await fetch(apiUrl('/api/live/connect'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, action: 'connect', username: tiktokInput }),
+        body: JSON.stringify({ token: effectiveToken, action: 'connect', username: tiktokInput }),
       });
       const data = await res.json();
       if (data.state) {
@@ -911,7 +1114,7 @@ export function GameScreen({
     const res = await fetch(apiUrl('/api/live/connect'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, action: 'toggle_bots', enabled: next, gameSlug: activeSlug }),
+      body: JSON.stringify({ token: effectiveToken, action: 'toggle_bots', enabled: next, gameSlug: activeSlug }),
     }).catch(() => null);
     if (res) {
       const data = await res.json().catch(() => null);
@@ -935,7 +1138,7 @@ export function GameScreen({
     await fetch(apiUrl('/api/live/event'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, type: 'chat', username: simUser, message: text }),
+      body: JSON.stringify({ token: effectiveToken, type: 'chat', username: simUser, message: text }),
     }).catch(() => {});
   };
 
@@ -954,7 +1157,7 @@ export function GameScreen({
     await fetch(apiUrl('/api/live/event'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, type: 'gift', username: simUser, giftName, coins, giftEmoji }),
+      body: JSON.stringify({ token: effectiveToken, type: 'gift', username: simUser, giftName, coins, giftEmoji }),
     }).catch(() => {});
   };
 
@@ -971,7 +1174,7 @@ export function GameScreen({
     await fetch(apiUrl('/api/live/event'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, type: 'like', username: simUser, likeCount }),
+      body: JSON.stringify({ token: effectiveToken, type: 'like', username: simUser, likeCount }),
     }).catch(() => {});
   };
 
@@ -980,7 +1183,7 @@ export function GameScreen({
     await fetch(apiUrl('/api/live/event'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, type: 'control', action, payload }),
+      body: JSON.stringify({ token: effectiveToken, type: 'control', action, payload }),
     }).catch(() => {});
   };
 
@@ -1002,34 +1205,70 @@ export function GameScreen({
     return Object.values(merged).sort((a, b) => b.points - a.points).slice(0, 3);
   }, [localScores, sessionState?.scores]);
 
+  const mergedCoinMap = useMemo(() => {
+    const map: Record<string, GiftLeaderEntry> = { ...giftLeaders };
+    if (sessionState?.coinLeaders) {
+      Object.values(sessionState.coinLeaders).forEach((s) => {
+        const cur = map[s.username];
+        if (!cur || s.coins >= cur.coins) {
+          map[s.username] = {
+            username: s.username,
+            avatar: s.avatar || cur?.avatar,
+            coins: s.coins,
+            giftsCount: s.giftsCount || 1,
+            lastEmoji: s.lastEmoji || '🌹',
+          };
+        }
+      });
+    }
+    return map;
+  }, [giftLeaders, sessionState?.coinLeaders]);
+
+  const mergedLikeMap = useMemo(() => {
+    const map: Record<string, LikeLeaderEntry> = { ...likeLeaders };
+    if (sessionState?.likeLeaders) {
+      Object.values(sessionState.likeLeaders).forEach((s) => {
+        const cur = map[s.username];
+        if (!cur || s.likes >= cur.likes) {
+          map[s.username] = {
+            username: s.username,
+            avatar: s.avatar || cur?.avatar,
+            likes: s.likes,
+          };
+        }
+      });
+    }
+    return map;
+  }, [likeLeaders, sessionState?.likeLeaders]);
+
   const topGifters = useMemo(() => {
-    const sorted = Object.values(giftLeaders)
+    const sorted = Object.values(mergedCoinMap)
       .sort((a, b) => b.coins - a.coins)
       .slice(0, 3);
     while (sorted.length < 3) {
       sorted.push({ username: '—', coins: 0, giftsCount: 0, lastEmoji: '🎁' });
     }
     return sorted;
-  }, [giftLeaders]);
+  }, [mergedCoinMap]);
 
   const topLikers = useMemo(() => {
-    const sorted = Object.values(likeLeaders)
+    const sorted = Object.values(mergedLikeMap)
       .sort((a, b) => b.likes - a.likes)
       .slice(0, 3);
     while (sorted.length < 3) {
       sorted.push({ username: '—', likes: 0 });
     }
     return sorted;
-  }, [likeLeaders]);
+  }, [mergedLikeMap]);
 
   const totalStreamCoins = useMemo(
-    () => Object.values(giftLeaders).reduce((acc, item) => acc + item.coins, 0),
-    [giftLeaders]
+    () => Math.max(sessionState?.totalCoins || 0, Object.values(mergedCoinMap).reduce((acc, item) => acc + item.coins, 0)),
+    [mergedCoinMap, sessionState?.totalCoins]
   );
 
   const totalStreamLikes = useMemo(
-    () => Object.values(likeLeaders).reduce((acc, item) => acc + item.likes, 0),
-    [likeLeaders]
+    () => Math.max(sessionState?.totalLikes || 0, Object.values(mergedLikeMap).reduce((acc, item) => acc + item.likes, 0)),
+    [mergedLikeMap, sessionState?.totalLikes]
   );
 
   const maxCoinLeader = Math.max(1, topGifters[0]?.coins || 1);
@@ -1054,7 +1293,7 @@ export function GameScreen({
   // Render active game body
   const renderGameBody = () => {
     if (activeSlug === 'contexto') {
-      const target = CONTEXTO_WORDS[roundIdx % CONTEXTO_WORDS.length];
+      const target = customContextoPool[roundIdx % customContextoPool.length];
       return (
         <div className="flex flex-1 flex-col gap-2.5 overflow-hidden">
           <div className={`rounded-2xl border p-3 text-center backdrop-blur-md ${isDarkSurface ? 'border-white/15 bg-white/[0.07] shadow-card' : 'border-violet-200 bg-white shadow-sm'}`}>
@@ -1069,29 +1308,35 @@ export function GameScreen({
           </div>
 
           <div className="flex-1 space-y-1.5 overflow-y-auto pr-1">
-            {contextoGuesses.map((g) => {
-              const widthPct = Math.max(12, Math.min(100, 100 - (g.rank / 10)));
-              const barColor =
-                g.rank <= 30 ? 'bg-emerald-500' : g.rank <= 250 ? 'bg-amber-400' : 'bg-rose-400';
-              return (
-                <div
-                  key={g.id}
-                  className={`animate-spring-pop relative overflow-hidden rounded-xl border px-3 py-2 text-sm font-bold ${
-                    isDarkSurface ? 'border-white/10 bg-white/10' : 'border-slate-200/80 bg-white'
-                  }`}
-                >
-                  <div className={`absolute inset-y-0 left-0 opacity-20 ${barColor}`} style={{ width: `${widthPct}%` }} />
-                  <div className="relative flex items-center justify-between">
-                    <span className="flex items-center gap-2">
-                      <span className={`inline-block h-2.5 w-2.5 rounded-full ${barColor}`} />
-                      <span>{g.word}</span>
-                      <span className="text-[11px] font-medium opacity-60">@{g.user}</span>
-                    </span>
-                    <span className="font-mono text-xs font-extrabold">#{g.rank}</span>
+            {contextoGuesses.length === 0 ? (
+              <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-white/15 px-4 text-center text-xs font-semibold text-slate-300/75">
+                Напишите любое слово в чат TikTok, чтобы проверить близость к загаданному слову
+              </div>
+            ) : (
+              contextoGuesses.map((g) => {
+                const widthPct = Math.max(12, Math.min(100, 100 - (g.rank / 10)));
+                const barColor =
+                  g.rank <= 30 ? 'bg-emerald-500' : g.rank <= 250 ? 'bg-amber-400' : 'bg-rose-400';
+                return (
+                  <div
+                    key={g.id}
+                    className={`animate-spring-pop relative overflow-hidden rounded-xl border px-3 py-2 text-sm font-bold ${
+                      isDarkSurface ? 'border-white/10 bg-white/10' : 'border-slate-200/80 bg-white'
+                    }`}
+                  >
+                    <div className={`absolute inset-y-0 left-0 opacity-20 ${barColor}`} style={{ width: `${widthPct}%` }} />
+                    <div className="relative flex items-center justify-between">
+                      <span className="flex items-center gap-2">
+                        <span className={`inline-block h-2.5 w-2.5 rounded-full ${barColor}`} />
+                        <span>{g.word}</span>
+                        <span className="text-[11px] font-medium opacity-60">@{g.user}</span>
+                      </span>
+                      <span className="font-mono text-xs font-extrabold">#{g.rank}</span>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
       );
@@ -1124,7 +1369,7 @@ export function GameScreen({
     }
 
     if (activeSlug === 'word-reveal') {
-      const item = REVEAL_WORDS[roundIdx % REVEAL_WORDS.length];
+      const item = customRevealPool[roundIdx % customRevealPool.length];
       return (
         <div className="flex flex-1 flex-col items-center justify-center gap-5 text-center">
           <span className="rounded-full bg-[#6C2BD9] px-3 py-1 text-xs font-bold text-white">
@@ -1176,6 +1421,7 @@ export function GameScreen({
               roundKey={roundNum}
               ballShape={ballShape}
               accentColor={accentColor}
+              isLivePlay={mode === 'play'}
               doodleWord={item.word}
               doodleProgress={doodleProgress}
               freeDrawMode={freeDrawMode}
@@ -1272,7 +1518,7 @@ export function GameScreen({
     }
 
     if (activeSlug === 'trivia') {
-      const q = TRIVIA_QUESTIONS[roundIdx % TRIVIA_QUESTIONS.length];
+      const q = customTriviaPool[roundIdx % customTriviaPool.length];
       return (
         <div className="flex flex-1 flex-col justify-center gap-3">
           <div className="flex items-center justify-between text-xs font-bold">
@@ -1331,6 +1577,7 @@ export function GameScreen({
               roundKey={roundNum}
               ballShape={ballShape}
               accentColor={accentColor}
+              isLivePlay={mode === 'play'}
               onWinner={(u, reason) => triggerWin(u, reason, 5)}
             />
           </div>
@@ -1395,7 +1642,7 @@ export function GameScreen({
     }
 
     if (activeSlug === 'emoji-quiz') {
-      const puz = EMOJI_PUZZLES[roundIdx % EMOJI_PUZZLES.length];
+      const puz = customEmojiPool[roundIdx % customEmojiPool.length];
       return (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
           <span className="rounded-full bg-amber-400 px-3 py-1 text-xs font-extrabold text-black">{puz.category}</span>
@@ -1524,6 +1771,10 @@ export function GameScreen({
               <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
                 <Wifi className="h-3 w-3" /> LIVE
               </span>
+            ) : mode === 'play' && normalizeNick(tiktokInput) ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-200">
+                ⏳ Ждём @{normalizeNick(tiktokInput).slice(0, 10)}
+              </span>
             ) : localBots || sessionState?.botsEnabled ? (
               <span className="inline-flex items-center gap-1 rounded-full border border-violet-400/30 bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-violet-200">
                 <Bot className="h-3 w-3" /> БОТЫ
@@ -1609,6 +1860,11 @@ export function GameScreen({
               : 'border-violet-200/80 bg-white/80 shadow-sm'
           }`}
         >
+          {sessionState?.skin?.logoText && sessionState.skin.logoText !== 'VibePlay LIVE' && (
+            <div className="mb-1 text-center text-[9px] font-extrabold uppercase tracking-widest text-violet-300/80">
+              {sessionState.skin.logoText}
+            </div>
+          )}
           {renderGameBody()}
         </div>
 

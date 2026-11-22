@@ -68,59 +68,137 @@ function normalizeUsername(raw) {
   return s.replace(/^@/, '').replace(/\\/.*$/, '').trim();
 }
 
+function createDefaultState(key) {
+  return {
+    token: key,
+    tiktokUsername: '',
+    roomId: '',
+    connectionStatus: 'disconnected',
+    connectionError: null,
+    botsEnabled: false,
+    viewerCount: 0,
+    peakViewers: 0,
+    totalMessages: 0,
+    totalGifts: 0,
+    totalLikes: 0,
+    totalCoins: 0,
+    activeGameSlug: 'contexto',
+    giftPreset: 'light',
+    moderation: {
+      profanityOn: true,
+      antiFloodSec: 0,
+      stopWords: ['спам', 'скам'],
+      bannedUsers: [],
+      mutedUsers: [],
+    },
+    skin: {
+      accentColor: '#7C3AED',
+      backgroundMode: 'neon',
+      ballShape: 'circle',
+      fontFamily: 'Manrope',
+      logoText: 'VibePlay LIVE',
+    },
+    playlist: {
+      autopilot: false,
+      rotateBy: 'rounds',
+      rotateInterval: 3,
+      queueSlugs: ['contexto', 'flag-quiz', 'ball-royale', 'secret-word'],
+    },
+    scores: {},
+    coinLeaders: {},
+    likeLeaders: {},
+    minuteActivity: [],
+    recentEvents: [],
+    customItems: [],
+  };
+}
+
 function getRoom(token) {
-  const key = (token || 'streamer-demo').trim();
+  const key = (token || 'live').trim();
   if (!rooms.has(key)) {
     rooms.set(key, {
-      state: {
-        token: key,
-        tiktokUsername: '',
-        roomId: '',
-        connectionStatus: 'disconnected',
-        connectionError: null,
-        botsEnabled: false,
-        viewerCount: 1,
-        peakViewers: 1,
-        totalMessages: 0,
-        totalGifts: 0,
-        totalLikes: 0,
-        activeGameSlug: 'contexto',
-        giftPreset: 'light',
-        moderation: {
-          profanityOn: true,
-          antiFloodSec: 0,
-          stopWords: ['спам', 'скам'],
-          bannedUsers: [],
-          mutedUsers: [],
-        },
-        skin: {
-          accentColor: '#7C3AED',
-          backgroundMode: 'neon',
-          ballShape: 'circle',
-          fontFamily: 'Manrope',
-          logoText: 'VibePlay LIVE',
-        },
-        playlist: {
-          autopilot: false,
-          rotateBy: 'rounds',
-          rotateInterval: 3,
-          queueSlugs: ['contexto', 'flag-quiz', 'ball-royale', 'secret-word'],
-        },
-        scores: {
-          artem_gg: { username: 'artem_gg', avatar: '🧑‍💻', points: 14, wins: 3 },
-          lera_fox: { username: 'lera_fox', avatar: '🦊', points: 11, wins: 2 },
-          max_turbo: { username: 'max_turbo', avatar: '⚡', points: 8, wins: 1 },
-        },
-        recentEvents: [],
-        customItems: [],
-      },
+      state: createDefaultState(key),
       roomId: '',
       cursor: '',
       lastConnectAttempt: 0,
       eulerBlocked: false,
+      lastKvRead: 0,
     });
   }
   return rooms.get(key);
+}
+
+async function loadRoom(token, env) {
+  const key = (token || 'live').trim();
+  const room = getRoom(key);
+  const now = Date.now();
+  if (env && env.ROOMS_KV && now - room.lastKvRead > 3500) {
+    room.lastKvRead = now;
+    try {
+      const saved = await env.ROOMS_KV.get('room:' + key, 'json');
+      if (saved && typeof saved === 'object') {
+        room.state = {
+          ...createDefaultState(key),
+          ...saved,
+          moderation: { ...createDefaultState(key).moderation, ...(saved.moderation || {}) },
+          skin: { ...createDefaultState(key).skin, ...(saved.skin || {}) },
+          playlist: { ...createDefaultState(key).playlist, ...(saved.playlist || {}) },
+          scores: saved.scores || {},
+          coinLeaders: saved.coinLeaders || {},
+          likeLeaders: saved.likeLeaders || {},
+          minuteActivity: Array.isArray(saved.minuteActivity) ? saved.minuteActivity : [],
+          recentEvents: Array.isArray(saved.recentEvents) ? saved.recentEvents : [],
+          customItems: Array.isArray(saved.customItems) ? saved.customItems : [],
+        };
+        if (room.state.roomId) room.roomId = room.state.roomId;
+      }
+    } catch {
+      // ignore KV read failure
+    }
+  }
+  return room;
+}
+
+function trimTopMap(obj, key, max = 20) {
+  if (!obj || typeof obj !== 'object') return {};
+  const entries = Object.entries(obj);
+  if (entries.length <= 25) return obj;
+  entries.sort((a, b) => ((b[1] && b[1][key]) || 0) - ((a[1] && a[1][key]) || 0));
+  return Object.fromEntries(entries.slice(0, max));
+}
+
+async function saveRoom(room, env) {
+  if (room && room.state) {
+    room.state.scores = trimTopMap(room.state.scores, 'points', 20);
+    room.state.coinLeaders = trimTopMap(room.state.coinLeaders, 'coins', 20);
+    room.state.likeLeaders = trimTopMap(room.state.likeLeaders, 'likes', 20);
+    if (Array.isArray(room.state.recentEvents) && room.state.recentEvents.length > 20) {
+      room.state.recentEvents = room.state.recentEvents.slice(0, 20);
+    }
+  }
+  if (!env || !env.ROOMS_KV) return;
+  try {
+    room.lastKvRead = Date.now();
+    await env.ROOMS_KV.put('room:' + room.state.token, JSON.stringify(room.state), {
+      expirationTtl: 60 * 60 * 24 * 7,
+    });
+  } catch {
+    // ignore KV write failure
+  }
+}
+
+function recordActivity(state) {
+  const d = new Date();
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  const label = hh + ':' + mm;
+  const list = Array.isArray(state.minuteActivity) ? state.minuteActivity : [];
+  const last = list[list.length - 1];
+  if (last && last.label === label) {
+    last.count += 1;
+  } else {
+    state.minuteActivity = [...list, { label, count: 1 }].slice(-12);
+  }
 }
 
 const CORS_HEADERS = {
@@ -154,7 +232,7 @@ function pushEvent(room, ev) {
       if (first) set.delete(first);
     }
   }
-  room.state.recentEvents = [ev, ...room.state.recentEvents].slice(0, 60);
+  room.state.recentEvents = [ev, ...room.state.recentEvents].slice(0, 20);
   return true;
 }
 
@@ -466,7 +544,9 @@ async function resolveTikTokRoom(username) {
 }
 
 function ingestEventsIntoRoom(room, events, viewerCount) {
+  let changed = false;
   if (typeof viewerCount === 'number' && Number.isFinite(viewerCount) && viewerCount > 0) {
+    if (room.state.viewerCount !== viewerCount) changed = true;
     room.state.viewerCount = viewerCount;
     if (viewerCount > room.state.peakViewers) room.state.peakViewers = viewerCount;
   }
@@ -476,27 +556,53 @@ function ingestEventsIntoRoom(room, events, viewerCount) {
       const lowerText = String(ev.message || '').toLowerCase();
       if (room.state.moderation.bannedUsers.some((u) => u.toLowerCase() === lowerUser)) continue;
       if (room.state.moderation.stopWords.some((w) => w && lowerText.includes(w.toLowerCase()))) continue;
+      if (room.state.moderation.profanityOn && ['спам', 'реклама', 'http://', 'https://'].some((w) => lowerText.includes(w))) continue;
       if (pushEvent(room, ev)) {
+        changed = true;
         room.state.totalMessages += 1;
+        recordActivity(room.state);
         if (!room.state.scores[ev.username]) {
           room.state.scores[ev.username] = { username: ev.username, avatar: ev.avatar || '🎮', points: 0, wins: 0 };
+        } else if (ev.avatar && ev.avatar.startsWith('http')) {
+          room.state.scores[ev.username].avatar = ev.avatar;
         }
       }
     } else if (ev.type === 'gift') {
       if (pushEvent(room, ev)) {
+        changed = true;
+        const coins = Math.max(1, Number(ev.coins || 1));
         room.state.totalGifts += 1;
-        const coins = Number(ev.coins || 1);
+        room.state.totalCoins = (room.state.totalCoins || 0) + coins;
+        recordActivity(room.state);
         if (!room.state.scores[ev.username]) {
           room.state.scores[ev.username] = { username: ev.username, avatar: ev.avatar || '💎', points: 0, wins: 0 };
         }
         room.state.scores[ev.username].points += Math.max(1, Math.min(10, Math.round(coins / 2)));
+        const prevC = room.state.coinLeaders[ev.username];
+        room.state.coinLeaders[ev.username] = {
+          username: ev.username,
+          avatar: ev.avatar || (prevC ? prevC.avatar : undefined),
+          coins: (prevC ? prevC.coins : 0) + coins,
+          giftsCount: (prevC ? prevC.giftsCount : 0) + 1,
+          lastGiftName: ev.giftName || 'Подарок',
+          lastEmoji: ev.giftEmoji || '🌹',
+        };
       }
     } else if (ev.type === 'like') {
       if (pushEvent(room, ev)) {
-        room.state.totalLikes += Number(ev.likeCount || 1);
+        changed = true;
+        const count = Math.max(1, Number(ev.likeCount || 1));
+        room.state.totalLikes += count;
+        const prevL = room.state.likeLeaders[ev.username];
+        room.state.likeLeaders[ev.username] = {
+          username: ev.username,
+          avatar: ev.avatar || (prevL ? prevL.avatar : undefined),
+          likes: (prevL ? prevL.likes : 0) + count,
+        };
       }
     }
   }
+  return changed;
 }
 
 async function connectRoomTikTok(room, rawUsername, forceRefresh = false) {
@@ -576,13 +682,18 @@ export default {
 
     // API: /api/live/stream
     if (pathname === '/api/live/stream' && request.method === 'GET') {
-      const token = url.searchParams.get('token') || 'streamer-demo';
+      const token = url.searchParams.get('token') || 'live';
       const mode = url.searchParams.get('mode') || 'sse';
       const qUser = url.searchParams.get('username') || '';
-      const room = getRoom(token);
+      const room = await loadRoom(token, env);
 
       if (qUser.trim()) {
+        const beforeStatus = room.state.connectionStatus;
+        const beforeRoomId = room.state.roomId;
         await connectRoomTikTok(room, qUser, false);
+        if (room.state.connectionStatus !== beforeStatus || room.state.roomId !== beforeRoomId) {
+          await saveRoom(room, env);
+        }
       }
 
       if (mode === 'json') {
@@ -614,25 +725,28 @@ export default {
     if (pathname === '/api/live/connect' && request.method === 'POST') {
       try {
         const body = await request.json();
-        const token = String(body.token || 'streamer-demo');
+        const token = String(body.token || 'live');
         const action = String(body.action || 'connect');
-        const room = getRoom(token);
+        const room = await loadRoom(token, env);
 
         if (action === 'disconnect') {
           room.roomId = '';
           room.state.roomId = '';
           room.state.connectionStatus = 'disconnected';
           room.state.connectionError = null;
+          await saveRoom(room, env);
           return jsonResponse({ ok: true, state: room.state });
         }
 
         if (action === 'toggle_bots') {
           room.state.botsEnabled = Boolean(body.enabled);
           if (typeof body.gameSlug === 'string') room.state.activeGameSlug = body.gameSlug;
+          await saveRoom(room, env);
           return jsonResponse({ ok: true, state: room.state });
         }
 
         const state = await connectRoomTikTok(room, String(body.username || ''), true);
+        await saveRoom(room, env);
         return jsonResponse({ ok: state.connectionStatus === 'connected', state });
       } catch {
         return jsonResponse({ ok: false, error: 'Bad request' }, 400);
@@ -643,18 +757,21 @@ export default {
     if (pathname === '/api/live/event' && request.method === 'POST') {
       try {
         const body = await request.json();
-        const token = String(body.token || 'streamer-demo');
+        const token = String(body.token || 'live');
         const type = String(body.type || 'chat');
         const externalId = typeof body.id === 'string' && body.id.trim() ? body.id.trim() : '';
-        const room = getRoom(token);
+        const room = await loadRoom(token, env);
         const state = room.state;
 
+        let viewerChanged = false;
         if (typeof body.viewerCount === 'number' && Number.isFinite(body.viewerCount) && body.viewerCount > 0) {
+          if (state.viewerCount !== body.viewerCount) viewerChanged = true;
           state.viewerCount = body.viewerCount;
           if (body.viewerCount > state.peakViewers) state.peakViewers = body.viewerCount;
         }
 
         if (type === 'viewer_count') {
+          if (viewerChanged) await saveRoom(room, env);
           return jsonResponse({ ok: true, state });
         }
 
@@ -671,6 +788,9 @@ export default {
           if (state.moderation.stopWords.some((w) => w && lowerMsg.includes(w.toLowerCase()))) {
             return jsonResponse({ ok: false, state });
           }
+          if (state.moderation.profanityOn && ['спам', 'реклама', 'http://', 'https://'].some((w) => lowerMsg.includes(w))) {
+            return jsonResponse({ ok: false, state });
+          }
 
           const ev = {
             id: externalId || Date.now() + '-' + Math.random().toString(36).slice(2, 7),
@@ -684,23 +804,28 @@ export default {
             return jsonResponse({ ok: false, state });
           }
           state.totalMessages += 1;
+          recordActivity(state);
           if (!state.scores[username]) {
-            state.scores[username] = { username, avatar: '🎮', points: 0, wins: 0 };
+            state.scores[username] = { username, avatar: typeof body.avatar === 'string' ? body.avatar : '🎮', points: 0, wins: 0 };
+          } else if (typeof body.avatar === 'string' && body.avatar.startsWith('http')) {
+            state.scores[username].avatar = body.avatar;
           }
+          await saveRoom(room, env);
           return jsonResponse({ ok: true, event: ev, state });
         }
 
         if (type === 'gift') {
           const username = String(body.username || 'Донатер').replace(/^@/, '').trim();
           const giftName = String(body.giftName || 'Роза');
-          const coins = Number(body.coins || 1);
+          const coins = Math.max(1, Number(body.coins || 1));
           const giftEmoji = typeof body.giftEmoji === 'string' ? body.giftEmoji : '🌹';
+          const avatar = typeof body.avatar === 'string' ? body.avatar : undefined;
           const ev = {
             id: externalId || Date.now() + '-' + Math.random().toString(36).slice(2, 7),
             type: 'gift',
             timestamp: Date.now(),
             username,
-            avatar: typeof body.avatar === 'string' ? body.avatar : undefined,
+            avatar,
             giftName,
             giftEmoji,
             coins,
@@ -709,27 +834,48 @@ export default {
             return jsonResponse({ ok: false, state });
           }
           state.totalGifts += 1;
+          state.totalCoins = (state.totalCoins || 0) + coins;
+          recordActivity(state);
           if (!state.scores[username]) {
-            state.scores[username] = { username, avatar: '💎', points: 0, wins: 0 };
+            state.scores[username] = { username, avatar: avatar || '💎', points: 0, wins: 0 };
           }
           state.scores[username].points += Math.max(1, Math.min(10, Math.round(coins / 2)));
+          const prevC = state.coinLeaders[username];
+          state.coinLeaders[username] = {
+            username,
+            avatar: avatar || (prevC ? prevC.avatar : undefined),
+            coins: (prevC ? prevC.coins : 0) + coins,
+            giftsCount: (prevC ? prevC.giftsCount : 0) + 1,
+            lastGiftName: giftName,
+            lastEmoji: giftEmoji,
+          };
+          await saveRoom(room, env);
           return jsonResponse({ ok: true, event: ev, state });
         }
 
         if (type === 'like') {
           const username = String(body.username || 'Зритель').replace(/^@/, '').trim();
           const likeCount = Math.max(1, Number(body.likeCount || 1));
+          const avatar = typeof body.avatar === 'string' ? body.avatar : undefined;
           const ev = {
             id: externalId || Date.now() + '-like-' + Math.random().toString(36).slice(2, 6),
             type: 'like',
             timestamp: Date.now(),
             username,
+            avatar,
             likeCount,
           };
           if (!pushEvent(room, ev)) {
             return jsonResponse({ ok: false, state });
           }
           state.totalLikes += likeCount;
+          const prevL = state.likeLeaders[username];
+          state.likeLeaders[username] = {
+            username,
+            avatar: avatar || (prevL ? prevL.avatar : undefined),
+            likes: (prevL ? prevL.likes : 0) + likeCount,
+          };
+          await saveRoom(room, env);
           return jsonResponse({ ok: true, event: ev, state });
         }
 
@@ -737,7 +883,16 @@ export default {
           const action = String(body.action || '');
           const payload = body.payload || {};
           if (action === 'set_game' && typeof payload.slug === 'string') state.activeGameSlug = payload.slug;
-          if (action === 'reset_scores') state.scores = {};
+          if (action === 'reset_scores') {
+            state.scores = {};
+            state.coinLeaders = {};
+            state.likeLeaders = {};
+            state.totalCoins = 0;
+            state.totalMessages = 0;
+            state.totalGifts = 0;
+            state.totalLikes = 0;
+            state.minuteActivity = [];
+          }
           if (action === 'award_point' && typeof payload.username === 'string') {
             const u = payload.username;
             if (!state.scores[u]) state.scores[u] = { username: u, avatar: '🏆', points: 0, wins: 0 };
@@ -751,6 +906,9 @@ export default {
           if (action === 'add_custom_content' && Array.isArray(payload.items)) {
             state.customItems = [...payload.items, ...state.customItems].slice(0, 200);
           }
+          if (action === 'set_custom_content' && Array.isArray(payload.items)) {
+            state.customItems = payload.items.slice(0, 200);
+          }
           const ev = {
             id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
             type: 'control',
@@ -760,6 +918,7 @@ export default {
             payload,
           };
           pushEvent(room, ev);
+          await saveRoom(room, env);
           return jsonResponse({ ok: true, event: ev, state });
         }
 
@@ -769,10 +928,10 @@ export default {
       }
     }
 
-    // Dynamic fallback for any /play/[token]/[slug] -> serve pre-rendered /play/streamer-demo/[slug]
+    // Dynamic fallback for any /play/[token]/[slug] -> serve pre-rendered /play/live/[slug]
     const playMatch = pathname.match(/^\\/play\\/[^/]+\\/([^/]+)\\/?$/);
     if (playMatch && playMatch[1]) {
-      const targetUrl = new URL('/play/streamer-demo/' + playMatch[1], url.origin);
+      const targetUrl = new URL('/play/live/' + playMatch[1], url.origin);
       const assetRes = await env.ASSETS.fetch(new Request(targetUrl.toString(), request));
       if (assetRes.ok) {
         return new Response(assetRes.body, {

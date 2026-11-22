@@ -18,6 +18,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { Lang, getDictionary } from '@/lib/i18n';
+import { buildLivePlayUrl, getOrCreateStreamerProfile } from '@/lib/streamerSession';
 
 export default function DashboardLayout({
   children,
@@ -28,20 +29,13 @@ export default function DashboardLayout({
 }) {
   const dict = getDictionary(params.lang);
   const pathname = usePathname() || '';
-  const [userEmail, setUserEmail] = useState('Демо-стример');
+  const [userLabel, setUserLabel] = useState('Кабинет стримера');
+  const [playHref, setPlayHref] = useState('/play/live/contexto');
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('vp_user');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed?.email) setUserEmail(parsed.email);
-      } else {
-        localStorage.setItem('vp_user', JSON.stringify({ email: 'demo@vibeplay.live', token: 'streamer-demo' }));
-      }
-    } catch {
-      // ignore
-    }
+    const profile = getOrCreateStreamerProfile();
+    setUserLabel(profile.tiktokUsername ? `@${profile.tiktokUsername}` : profile.displayName || profile.email || 'Кабинет стримера');
+    setPlayHref(buildLivePlayUrl('', 'contexto', profile.token, profile.tiktokUsername));
   }, []);
 
   const navItems = [
@@ -107,9 +101,9 @@ export default function DashboardLayout({
         </div>
 
         <div className="space-y-2 rounded-2xl border border-white/10 bg-white/[0.04] p-3.5">
-          <div className="truncate text-xs font-bold text-white">{userEmail}</div>
+          <div className="truncate text-xs font-bold text-white">{userLabel}</div>
           <Link
-            href="/play/streamer-demo/contexto"
+            href={playHref}
             target="_blank"
             className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-[#7C3AED] to-fuchsia-600 py-2 text-xs font-bold text-white shadow-card hover:opacity-95"
           >
@@ -129,7 +123,7 @@ export default function DashboardLayout({
             <span className="font-display text-sm font-bold text-white">VibePlay LIVE</span>
           </Link>
           <Link
-            href="/play/streamer-demo/contexto"
+            href={playHref}
             className="rounded-xl bg-[#7C3AED] px-3 py-1.5 text-xs font-bold text-white"
           >
             📱 Игра 9:16

@@ -6,38 +6,42 @@ import { Wifi, Play, ArrowRight, Bot, Smartphone, Monitor } from 'lucide-react';
 import { GAMES } from '@/lib/games-data';
 import { Lang } from '@/lib/i18n';
 import { SessionState } from '@/lib/server/liveHub';
-import { apiUrl } from '@/lib/api';
+import { apiUrl, resolveBackendOrigin } from '@/lib/api';
+import { buildLivePlayUrl, getOrCreateStreamerProfile, normalizeNick, saveStreamerProfile } from '@/lib/streamerSession';
 
 export default function DashboardOverviewPage({ params }: { params: { lang: Lang } }) {
-  const token = 'streamer-demo';
+  const [roomToken, setRoomToken] = useState('live');
   const [tiktokNick, setTiktokNick] = useState('');
   const [state, setState] = useState<SessionState | null>(null);
   const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('vp_tiktok_nick');
-      if (saved) setTiktokNick(saved);
-    } catch {
-      // ignore
-    }
-    fetch(apiUrl(`/api/live/stream?token=${token}&mode=json`))
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.state) setState(d.state);
-      })
-      .catch(() => {});
+    const profile = getOrCreateStreamerProfile();
+    setRoomToken(profile.token);
+    if (profile.tiktokUsername) setTiktokNick(profile.tiktokUsername);
+
+    resolveBackendOrigin().then(() => {
+      const userQ = profile.tiktokUsername ? `&username=${encodeURIComponent(profile.tiktokUsername)}` : '';
+      fetch(apiUrl(`/api/live/stream?token=${encodeURIComponent(profile.token)}&mode=json${userQ}`))
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.state) setState(d.state);
+        })
+        .catch(() => {});
+    });
   }, []);
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     setConnecting(true);
     try {
-      localStorage.setItem('vp_tiktok_nick', tiktokNick);
+      await resolveBackendOrigin();
+      const cleanNick = normalizeNick(tiktokNick);
+      saveStreamerProfile({ tiktokUsername: cleanNick, token: roomToken });
       const res = await fetch(apiUrl('/api/live/connect'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, action: 'connect', username: tiktokNick }),
+        body: JSON.stringify({ token: roomToken, action: 'connect', username: cleanNick || tiktokNick }),
       });
       const data = await res.json();
       if (data.state) setState(data.state);
@@ -47,15 +51,18 @@ export default function DashboardOverviewPage({ params }: { params: { lang: Lang
   };
 
   const toggleBots = async () => {
+    await resolveBackendOrigin();
     const next = !(state?.botsEnabled ?? false);
     const res = await fetch(apiUrl('/api/live/connect'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, action: 'toggle_bots', enabled: next }),
+      body: JSON.stringify({ token: roomToken, action: 'toggle_bots', enabled: next }),
     });
     const data = await res.json();
     if (data.state) setState(data.state);
   };
+
+  const playUrl = buildLivePlayUrl('', state?.activeGameSlug || 'contexto', roomToken, tiktokNick);
 
   return (
     <div className="space-y-8">
@@ -118,29 +125,31 @@ export default function DashboardOverviewPage({ params }: { params: { lang: Lang
               {state?.botsEnabled ? 'Тестовый чат (боты): ВКЛ' : 'Включить тестовый чат (боты)'}
             </button>
             <span className="text-xs text-[#94A3B8]">
-              Сообщений: <strong className="text-white">{state?.totalMessages ?? 0}</strong> · Подарков:{' '}
-              <strong className="text-white">{state?.totalGifts ?? 0}</strong>
+              Сообщений: <strong className="text-white">{state?.totalMessages ?? 0}</strong> · Монет:{' '}
+              <strong className="text-amber-300">{state?.totalCoins ?? 0}</strong> · Лайков:{' '}
+              <strong className="text-pink-300">{state?.totalLikes ?? 0}</strong>
             </span>
           </div>
         </div>
 
         <div className="flex flex-col justify-between rounded-3xl border border-violet-400/30 bg-gradient-to-br from-[#6D28D9] via-[#7C3AED] to-fuchsia-600 p-6 text-white shadow-glow lg:col-span-5">
           <div>
-            <div className="text-xs font-bold uppercase tracking-wider text-white/80">Режим телефонного приложения</div>
-            <h2 className="mt-1 font-display text-xl font-extrabold">Стримьте прямо со смартфона</h2>
+            <div className="text-xs font-bold uppercase tracking-wider text-white/80">Личный экран эфира</div>
+            <h2 className="mt-1 font-display text-xl font-extrabold">Стримьте со смартфона и в OBS</h2>
             <p className="mt-2 text-xs leading-relaxed text-white/90">
-              Откройте экран 9:16 на весь телефон, включите Mobile Gaming в TikTok LIVE и управляйте игрой в один тап.
+              Ссылка содержит токен вашей комнаты ({roomToken}) и автоматически подключается к чату TikTok при старте эфира.
             </p>
           </div>
           <div className="mt-5 flex gap-2">
             <Link
-              href="/play/streamer-demo/contexto"
+              href={playUrl}
+              target="_blank"
               className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-2xl bg-white py-3 text-xs font-extrabold text-[#5B21B6]"
             >
               <Smartphone className="h-4 w-4" /> Запустить на телефоне
             </Link>
             <Link
-              href={`/${params.lang}/dashboard/games/contexto`}
+              href={`/${params.lang}/dashboard/games/${state?.activeGameSlug || 'contexto'}`}
               className="inline-flex items-center justify-center gap-1 rounded-2xl bg-white/15 px-4 py-3 text-xs font-bold text-white backdrop-blur-sm"
             >
               <Monitor className="h-4 w-4" /> OBS
@@ -176,23 +185,23 @@ export default function DashboardOverviewPage({ params }: { params: { lang: Lang
       </div>
 
       <div className="rounded-3xl border border-white/10 bg-[#120E24]/85 p-6 backdrop-blur-md">
-        <h2 className="font-display text-lg font-bold text-white">Последние эфиры</h2>
-        <div className="mt-4 space-y-2.5 text-sm">
-          {[
-            { date: 'Сегодня, 21:10', game: 'Контекстно', viewers: 340, msgs: 1840 },
-            { date: 'Вчера, 19:45', game: 'Битва шаров', viewers: 520, msgs: 3190 },
-          ].map((row, idx) => (
-            <div key={idx} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/5 bg-white/[0.04] px-4 py-3">
-              <div className="flex items-center gap-2.5">
-                <Play className="h-4 w-4 text-violet-400" />
-                <span className="font-bold text-white">{row.game}</span>
-                <span className="text-xs text-[#94A3B8]">{row.date}</span>
-              </div>
-              <div className="text-xs font-semibold text-[#94A3B8]">
-                Пик: {row.viewers} зрителей · {row.msgs} сообщений
-              </div>
-            </div>
-          ))}
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-lg font-bold text-white">Текущая комната эфира</h2>
+          <Link href={`/${params.lang}/dashboard/stats`} className="text-xs font-bold text-violet-400 hover:underline">
+            Подробная аналитика →
+          </Link>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/5 bg-white/[0.04] px-4 py-3 text-sm">
+          <div className="flex items-center gap-2.5">
+            <Play className="h-4 w-4 text-violet-400" />
+            <span className="font-bold text-white">
+              {state?.connectionStatus === 'connected' ? `Эфир @${state.tiktokUsername}` : 'Ожидание запуска эфира'}
+            </span>
+            <span className="font-mono text-xs text-violet-300">({roomToken})</span>
+          </div>
+          <div className="text-xs font-semibold text-[#94A3B8]">
+            Пик: {state?.peakViewers ?? 0} зрителей · {state?.totalMessages ?? 0} сообщений · {state?.totalCoins ?? 0} монет
+          </div>
         </div>
       </div>
     </div>

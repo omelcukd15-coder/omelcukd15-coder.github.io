@@ -4,6 +4,12 @@
   "main": "cloudflare-worker.js",
   "compatibility_date": "2026-11-20",
   "compatibility_flags": ["nodejs_compat"],
+  "kv_namespaces": [
+    {
+      "binding": "ROOMS_KV",
+      "id": "c0f8bac4ee8d46588f6aa273484f9eda"
+    }
+  ],
   "assets": {
     "directory": "./cloudflare-dist",
     "binding": "ASSETS",

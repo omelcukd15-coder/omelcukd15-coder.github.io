@@ -41,6 +41,21 @@ export interface PlaylistConfigState {
   queueSlugs: string[];
 }
 
+export interface CoinLeaderState {
+  username: string;
+  avatar?: string;
+  coins: number;
+  giftsCount: number;
+  lastGiftName?: string;
+  lastEmoji?: string;
+}
+
+export interface LikeLeaderState {
+  username: string;
+  avatar?: string;
+  likes: number;
+}
+
 export interface SessionState {
   token: string;
   tiktokUsername: string;
@@ -53,12 +68,16 @@ export interface SessionState {
   totalMessages: number;
   totalGifts: number;
   totalLikes: number;
+  totalCoins: number;
   activeGameSlug: string;
   giftPreset: 'light' | 'hardcore' | 'donate';
   moderation: ModerationConfigState;
   skin: SkinConfigState;
   playlist: PlaylistConfigState;
   scores: Record<string, { username: string; avatar: string; points: number; wins: number }>;
+  coinLeaders: Record<string, CoinLeaderState>;
+  likeLeaders: Record<string, LikeLeaderState>;
+  minuteActivity: { label: string; count: number }[];
   recentEvents: LiveEvent[];
   customItems: { id: string; gameSlug: string; text: string; answer: string }[];
 }
@@ -110,7 +129,7 @@ class LiveHub {
   private rooms = new Map<string, InternalRoom>();
 
   private getOrCreateRoom(token: string): InternalRoom {
-    const cleanToken = (token || 'streamer-demo').trim();
+    const cleanToken = (token || 'live').trim();
     let room = this.rooms.get(cleanToken);
     if (!room) {
       room = {
@@ -121,11 +140,12 @@ class LiveHub {
           connectionStatus: 'disconnected',
           connectionError: null,
           botsEnabled: false,
-          viewerCount: 1,
-          peakViewers: 1,
+          viewerCount: 0,
+          peakViewers: 0,
           totalMessages: 0,
           totalGifts: 0,
           totalLikes: 0,
+          totalCoins: 0,
           activeGameSlug: 'contexto',
           giftPreset: 'light',
           moderation: {
@@ -148,11 +168,10 @@ class LiveHub {
             rotateInterval: 3,
             queueSlugs: ['contexto', 'flag-quiz', 'ball-royale', 'secret-word'],
           },
-          scores: {
-            artem_gg: { username: 'artem_gg', avatar: '🧑‍💻', points: 14, wins: 3 },
-            lera_fox: { username: 'lera_fox', avatar: '🦊', points: 11, wins: 2 },
-            max_turbo: { username: 'max_turbo', avatar: '⚡', points: 8, wins: 1 },
-          },
+          scores: {},
+          coinLeaders: {},
+          likeLeaders: {},
+          minuteActivity: [],
           recentEvents: [],
           customItems: [],
         },
@@ -281,12 +300,24 @@ class LiveHub {
           true
         );
       } else if (ev.type === 'like') {
-        this.pushLikeEvent(token, ev.username || 'viewer', Number(ev.likeCount || 1), ev.id);
+        this.pushLikeEvent(token, ev.username || 'viewer', Number(ev.likeCount || 1), ev.id, ev.avatar);
       }
     }
 
     if (updatedViewers && events.length === 0) {
       this.broadcast(room);
+    }
+  }
+
+  private recordActivityBucket(room: InternalRoom) {
+    const d = new Date();
+    const label = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const list = room.state.minuteActivity;
+    const last = list[list.length - 1];
+    if (last && last.label === label) {
+      last.count += 1;
+    } else {
+      room.state.minuteActivity = [...list, { label, count: 1 }].slice(-12);
     }
   }
 
@@ -317,6 +348,7 @@ class LiveHub {
     }
 
     room.state.totalMessages += 1;
+    this.recordActivityBucket(room);
     if (!room.state.scores[cleanUser]) {
       room.state.scores[cleanUser] = {
         username: cleanUser,
@@ -324,6 +356,8 @@ class LiveHub {
         points: 0,
         wins: 0,
       };
+    } else if (avatar && avatar.startsWith('http')) {
+      room.state.scores[cleanUser].avatar = avatar;
     }
 
     const event: LiveEvent = {
@@ -360,40 +394,63 @@ class LiveHub {
     ) {
       return null;
     }
+    const safeCoins = Math.max(1, Number(coins || 1));
     room.state.totalGifts += 1;
+    room.state.totalCoins += safeCoins;
+    this.recordActivityBucket(room);
 
     if (!room.state.scores[cleanUser]) {
       room.state.scores[cleanUser] = { username: cleanUser, avatar: avatar || '💎', points: 0, wins: 0 };
     }
-    room.state.scores[cleanUser].points += Math.max(1, Math.min(10, Math.round(coins / 2)));
+    room.state.scores[cleanUser].points += Math.max(1, Math.min(10, Math.round(safeCoins / 2)));
+
+    const prevCoin = room.state.coinLeaders[cleanUser];
+    room.state.coinLeaders[cleanUser] = {
+      username: cleanUser,
+      avatar: avatar || prevCoin?.avatar,
+      coins: (prevCoin?.coins || 0) + safeCoins,
+      giftsCount: (prevCoin?.giftsCount || 0) + 1,
+      lastGiftName: giftName,
+      lastEmoji: giftEmoji || '🌹',
+    };
 
     const event: LiveEvent = {
       id: externalId || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       type: 'gift',
       timestamp: Date.now(),
       username: cleanUser,
-      avatar: avatar || '💎',
+      avatar: avatar || prevCoin?.avatar || '💎',
       giftName,
       giftEmoji: giftEmoji || '🌹',
-      coins,
+      coins: safeCoins,
     };
     this.broadcast(room, event);
     return event;
   }
 
-  pushLikeEvent(token: string, username: string, likes: number, externalId?: string): LiveEvent | null {
+  pushLikeEvent(token: string, username: string, likes: number, externalId?: string, avatar?: string): LiveEvent | null {
     const room = this.getOrCreateRoom(token);
     const cleanUser = username.replace(/^@/, '').trim() || 'viewer';
     if (externalId && this.isDuplicateExternal(room, externalId)) {
       return null;
     }
-    room.state.totalLikes += Math.max(1, likes || 1);
+    const count = Math.max(1, likes || 1);
+    room.state.totalLikes += count;
+
+    const prevLike = room.state.likeLeaders[cleanUser];
+    room.state.likeLeaders[cleanUser] = {
+      username: cleanUser,
+      avatar: avatar || prevLike?.avatar,
+      likes: (prevLike?.likes || 0) + count,
+    };
+
     const event: LiveEvent = {
       id: externalId || `${Date.now()}-like`,
       type: 'like',
       timestamp: Date.now(),
       username: cleanUser,
-      likeCount: Math.max(1, likes || 1),
+      avatar: avatar || prevLike?.avatar,
+      likeCount: count,
     };
     this.broadcast(room, event);
     return event;
@@ -415,6 +472,13 @@ class LiveHub {
       if (isWin) room.state.scores[uname].wins += 1;
     } else if (action === 'reset_scores') {
       room.state.scores = {};
+      room.state.coinLeaders = {};
+      room.state.likeLeaders = {};
+      room.state.totalCoins = 0;
+      room.state.totalMessages = 0;
+      room.state.totalGifts = 0;
+      room.state.totalLikes = 0;
+      room.state.minuteActivity = [];
     } else if (action === 'update_skin' && payload?.skin) {
       room.state.skin = { ...room.state.skin, ...(payload.skin as Partial<SkinConfigState>) };
     } else if (action === 'update_moderation' && payload?.moderation) {
@@ -426,6 +490,8 @@ class LiveHub {
     } else if (action === 'add_custom_content' && Array.isArray(payload?.items)) {
       const incoming = payload.items as { id: string; gameSlug: string; text: string; answer: string }[];
       room.state.customItems = [...incoming, ...room.state.customItems].slice(0, 200);
+    } else if (action === 'set_custom_content' && Array.isArray(payload?.items)) {
+      room.state.customItems = (payload.items as { id: string; gameSlug: string; text: string; answer: string }[]).slice(0, 200);
     }
 
     const event: LiveEvent = {
@@ -612,7 +678,8 @@ class LiveHub {
         const uid = data.user?.displayId || raw.user?.uniqueId || data.user?.nickname || 'supporter';
         const giftName = raw.giftDetails?.giftName || raw.gift?.name || raw.extendedGiftInfo?.name || 'Подарок';
         const avatar = data.user?.avatarThumb?.urlList?.[0];
-        this.pushGiftEvent(token, uid, giftName, coins, '🎁', avatar, msgId || undefined, true);
+        const giftEmoji = coins >= 100 ? '🦁' : coins >= 20 ? '🍩' : coins >= 5 ? '🫰' : '🌹';
+        this.pushGiftEvent(token, uid, giftName, coins, giftEmoji, avatar, msgId || undefined, true);
       });
 
       conn.on(WebcastEvent.LIKE, (data) => {
@@ -620,7 +687,8 @@ class LiveHub {
         const msgId = String(raw.common?.msgId || '');
         const uid = data.user?.displayId || raw.user?.uniqueId || data.user?.nickname || 'viewer';
         const likes = Number(data.count || raw.likeCount || 1);
-        this.pushLikeEvent(token, uid, likes, msgId || undefined);
+        const avatar = data.user?.avatarThumb?.urlList?.[0];
+        this.pushLikeEvent(token, uid, likes, msgId || undefined, avatar);
       });
 
       conn.on(WebcastEvent.ROOM_USER, (data) => {

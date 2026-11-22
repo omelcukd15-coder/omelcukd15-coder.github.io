@@ -14,7 +14,7 @@ export async function OPTIONS() {
 }
 
 export async function GET(req: NextRequest) {
-  const token = req.nextUrl.searchParams.get('token') || 'streamer-demo';
+  const token = req.nextUrl.searchParams.get('token') || 'live';
   const mode = req.nextUrl.searchParams.get('mode') || 'sse';
   const username = req.nextUrl.searchParams.get('username') || '';
 

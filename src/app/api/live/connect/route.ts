@@ -16,7 +16,7 @@ export async function OPTIONS() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const token = String(body.token || 'streamer-demo');
+    const token = String(body.token || 'live');
     const action = String(body.action || 'connect');
 
     if (action === 'disconnect') {

@@ -19,14 +19,15 @@ import { Lang } from '@/lib/i18n';
 import { GameScreen } from '@/components/game-engine/GameScreen';
 import { SessionState } from '@/lib/server/liveHub';
 import { apiUrl, resolveBackendOrigin } from '@/lib/api';
+import { buildLivePlayUrl, getOrCreateStreamerProfile, normalizeNick, saveStreamerProfile } from '@/lib/streamerSession';
 
 export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
-  const token = 'streamer-demo';
   const game = getGameBySlug(slug);
+  const [roomToken, setRoomToken] = useState('live');
   const [tiktokNick, setTiktokNick] = useState('');
   const [sessionState, setSessionState] = useState<SessionState | null>(null);
   const [connecting, setConnecting] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedType, setCopiedType] = useState<'main' | 'obs' | null>(null);
   const [setupTab, setSetupTab] = useState<'obs' | 'phone'>('phone');
   const [origin, setOrigin] = useState('');
   const [testMsg, setTestMsg] = useState('');
@@ -38,21 +39,18 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
 
   useEffect(() => {
     setOrigin(window.location.origin);
-    let saved = '';
-    try {
-      saved = localStorage.getItem('vp_tiktok_nick') || '';
-      if (saved) setTiktokNick(saved);
-    } catch {
-      // ignore
-    }
+    const profile = getOrCreateStreamerProfile();
+    setRoomToken(profile.token);
+    if (profile.tiktokUsername) setTiktokNick(profile.tiktokUsername);
+
     resolveBackendOrigin().then(() => {
-      const userQ = saved ? `&username=${encodeURIComponent(saved)}` : '';
-      fetch(apiUrl(`/api/live/stream?token=${token}&mode=json${userQ}`))
+      const userQ = profile.tiktokUsername ? `&username=${encodeURIComponent(profile.tiktokUsername)}` : '';
+      fetch(apiUrl(`/api/live/stream?token=${encodeURIComponent(profile.token)}&mode=json${userQ}`))
         .then((r) => r.json())
         .then((d) => {
           if (d.state) {
             setSessionState(d.state);
-            postToChannel({ type: 'session_state', state: d.state });
+            postToChannel({ type: 'session_state', state: d.state }, profile.token);
           }
         })
         .catch(() => {});
@@ -60,17 +58,18 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
       fetch(apiUrl('/api/live/event'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, type: 'control', action: 'set_game', payload: { slug } }),
+        body: JSON.stringify({ token: profile.token, type: 'control', action: 'set_game', payload: { slug } }),
       }).catch(() => {});
     });
   }, [slug]);
 
-  const playPath = `/play/${token}/${game.slug}`;
-  const fullUrl = origin ? `${origin}${playPath}` : playPath;
+  const playPath = buildLivePlayUrl('', game.slug, roomToken, tiktokNick);
+  const fullUrl = buildLivePlayUrl(origin, game.slug, roomToken, tiktokNick);
+  const obsCleanUrl = buildLivePlayUrl(origin, game.slug, roomToken, tiktokNick, true);
 
-  const postToChannel = (payload: unknown) => {
+  const postToChannel = (payload: unknown, targetToken = roomToken) => {
     try {
-      const bc = new BroadcastChannel(`vibeplay_${token}`);
+      const bc = new BroadcastChannel(`vibeplay_${targetToken}`);
       bc.postMessage(payload);
       bc.close();
     } catch {
@@ -78,11 +77,11 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
     }
   };
 
-  const copyLink = async () => {
+  const copyLink = async (which: 'main' | 'obs') => {
     try {
-      await navigator.clipboard.writeText(fullUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(which === 'obs' ? obsCleanUrl : fullUrl);
+      setCopiedType(which);
+      setTimeout(() => setCopiedType(null), 2000);
     } catch {
       // ignore
     }
@@ -93,11 +92,12 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
     setConnecting(true);
     try {
       await resolveBackendOrigin();
-      localStorage.setItem('vp_tiktok_nick', tiktokNick.trim());
+      const cleanNick = normalizeNick(tiktokNick);
+      saveStreamerProfile({ tiktokUsername: cleanNick, token: roomToken });
       const res = await fetch(apiUrl('/api/live/connect'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, action: 'connect', username: tiktokNick }),
+        body: JSON.stringify({ token: roomToken, action: 'connect', username: cleanNick || tiktokNick }),
       });
       const data = await res.json();
       if (data.state) {
@@ -117,7 +117,7 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
     const res = await fetch(apiUrl('/api/live/connect'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, action: 'toggle_bots', enabled: next, gameSlug: game.slug }),
+      body: JSON.stringify({ token: roomToken, action: 'toggle_bots', enabled: next, gameSlug: game.slug }),
     });
     const data = await res.json();
     if (data.state) setSessionState(data.state);
@@ -132,7 +132,7 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
     await fetch(apiUrl('/api/live/event'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, type: 'control', action }),
+      body: JSON.stringify({ token: roomToken, type: 'control', action }),
     }).catch(() => {});
   };
 
@@ -146,7 +146,7 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
     const res = await fetch(apiUrl('/api/live/event'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, type: 'chat', username: 'streamer_test', message: msg }),
+      body: JSON.stringify({ token: roomToken, type: 'chat', username: 'streamer_test', message: msg }),
     }).catch(() => null);
     if (res) {
       const data = await res.json().catch(() => null);
@@ -160,7 +160,7 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
     await fetch(apiUrl('/api/live/event'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, type: 'gift', username: 'fan_top', giftName, coins, giftEmoji }),
+      body: JSON.stringify({ token: roomToken, type: 'gift', username: 'fan_top', giftName, coins, giftEmoji }),
     }).catch(() => {});
   };
 
@@ -170,7 +170,7 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
     await fetch(apiUrl('/api/live/event'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, type: 'like', username: 'fan_top', likeCount }),
+      body: JSON.stringify({ token: roomToken, type: 'like', username: 'fan_top', likeCount }),
     }).catch(() => {});
   };
 
@@ -259,11 +259,19 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
               />
               <button
                 type="button"
-                onClick={copyLink}
+                onClick={() => copyLink('main')}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/[0.06] px-3.5 py-2 text-xs font-bold text-white hover:bg-white/[0.12]"
               >
-                {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-                <span>{copied ? 'Скопировано' : 'Копировать'}</span>
+                {copiedType === 'main' ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                <span>{copiedType === 'main' ? 'Скопировано' : 'Для телефона'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => copyLink('obs')}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-cyan-400/30 bg-cyan-500/15 px-3.5 py-2 text-xs font-bold text-cyan-200 hover:bg-cyan-500/25"
+              >
+                {copiedType === 'obs' ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Monitor className="h-3.5 w-3.5" />}
+                <span>{copiedType === 'obs' ? 'Скопировано OBS' : 'Для OBS (чистый экран)'}</span>
               </button>
               <Link
                 href={playPath}
@@ -371,7 +379,7 @@ export function GamePanelClient({ lang, slug }: { lang: Lang; slug: string }) {
           <div className="mb-2 text-xs font-bold text-[#94A3B8]">Живой предпросмотр (9:16 · 1080×1920)</div>
           <div className="h-[620px] w-[320px] overflow-hidden rounded-[2.75rem] border-[7px] border-white/15 bg-[#05040B] p-1 shadow-[0_0_50px_rgba(124,58,237,0.3)]">
             <div className="h-full w-full overflow-hidden rounded-[2.1rem]">
-              <GameScreen slug={game.slug} token={token} mode="preview" externalControl={controlTrigger} />
+              <GameScreen slug={game.slug} token={roomToken} mode="preview" initialBots={false} externalControl={controlTrigger} />
             </div>
           </div>
         </div>

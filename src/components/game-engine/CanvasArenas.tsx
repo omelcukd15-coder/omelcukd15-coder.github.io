@@ -10,6 +10,7 @@ interface ArenaProps {
   roundKey: number;
   ballShape: 'circle' | 'hex' | 'square';
   accentColor: string;
+  isLivePlay?: boolean;
   doodleWord?: string;
   doodleProgress?: number;
   freeDrawMode?: boolean;
@@ -57,6 +58,7 @@ export function CanvasArena({
   roundKey,
   ballShape,
   accentColor,
+  isLivePlay = false,
   doodleWord = 'кот',
   doodleProgress = 0.25,
   freeDrawMode = false,
@@ -100,11 +102,13 @@ export function CanvasArena({
     s.userStrokes = [];
 
     if (gameSlug === 'ball-royale') {
-      s.balls = [
-        { id: 'b1', name: 'artem_gg', x: 120, y: 180, vx: 1.9, vy: 1.4, r: 20, color: COLORS[0], shieldUntil: 0, alive: true },
-        { id: 'b2', name: 'lera_fox', x: 280, y: 180, vx: -1.7, vy: 1.8, r: 20, color: COLORS[1], shieldUntil: 0, alive: true },
-        { id: 'b3', name: 'max_turbo', x: 200, y: 310, vx: 1.5, vy: -1.6, r: 20, color: COLORS[2], shieldUntil: 0, alive: true },
-      ];
+      s.balls = isLivePlay
+        ? []
+        : [
+            { id: 'b1', name: 'artem_gg', x: 120, y: 180, vx: 1.9, vy: 1.4, r: 20, color: COLORS[0], shieldUntil: 0, alive: true },
+            { id: 'b2', name: 'lera_fox', x: 280, y: 180, vx: -1.7, vy: 1.8, r: 20, color: COLORS[1], shieldUntil: 0, alive: true },
+            { id: 'b3', name: 'max_turbo', x: 200, y: 310, vx: 1.5, vy: -1.6, r: 20, color: COLORS[2], shieldUntil: 0, alive: true },
+          ];
       s.food = Array.from({ length: 18 }, () => ({
         x: 70 + Math.random() * (W - 140),
         y: 90 + Math.random() * (H - 180),
@@ -133,18 +137,22 @@ export function CanvasArena({
         { x: 3, y: 8 },
       ];
       s.snakeDir = { x: 1, y: 0 };
-      s.apples = [
-        { x: 10, y: 6, name: 'artem_gg', golden: false },
-        { x: 8, y: 12, name: 'lera_fox', golden: false },
-      ];
+      s.apples = isLivePlay
+        ? []
+        : [
+            { x: 10, y: 6, name: 'artem_gg', golden: false },
+            { x: 8, y: 12, name: 'lera_fox', golden: false },
+          ];
     } else if (gameSlug === 'fortress-battle') {
       s.fortressHp = [1000, 1000];
-      s.soldiers = [
-        { team: 1, x: 75, y: 250, hp: 50, dmg: 12, boss: false, name: 'Рыцарь' },
-        { team: 2, x: 325, y: 250, hp: 50, dmg: 12, boss: false, name: 'Лучник' },
-      ];
+      s.soldiers = isLivePlay
+        ? []
+        : [
+            { team: 1, x: 75, y: 250, hp: 50, dmg: 12, boss: false, name: 'Рыцарь' },
+            { team: 2, x: 325, y: 250, hp: 50, dmg: 12, boss: false, name: 'Лучник' },
+          ];
     }
-  }, [gameSlug, roundKey]);
+  }, [gameSlug, roundKey, isLivePlay]);
 
   useEffect(() => {
     if (!latestEvent) return;
@@ -418,6 +426,13 @@ export function CanvasArena({
         const remaining = s.balls.filter((b) => b.alive);
         remaining.forEach((b) => drawBallShape(b.x, b.y, b.r, b.color, b.name, b.shieldUntil > Date.now()));
 
+        if (remaining.length === 0) {
+          ctx.fillStyle = 'rgba(255,255,255,0.88)';
+          ctx.font = 'bold 14px Manrope, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('Напишите в чат, чтобы выйти на арену!', W / 2, H / 2);
+        }
+
         if (remaining.length === 1 && s.balls.length > 1 && !s.winnerAnnounced) {
           s.winnerAnnounced = true;
           onWinnerRef.current?.(remaining[0].name, 'Последний выживший на арене!');
@@ -531,6 +546,13 @@ export function CanvasArena({
           ctx.fill();
           ctx.restore();
         });
+
+        if (s.apples.length === 0) {
+          ctx.fillStyle = 'rgba(255,255,255,0.82)';
+          ctx.font = 'bold 13px Manrope, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('Напишите в чат, чтобы сбросить яблоко!', W / 2, H - 36);
+        }
       } else if (gameSlug === 'fortress-battle') {
         ctx.fillStyle = '#090717';
         ctx.fillRect(0, 0, W, H);
